@@ -6,11 +6,13 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
 
 var (
 	cfgPath  string
+	dbPath   string
 	logLevel string
 )
 
@@ -24,15 +26,27 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return tui.Run(cmd.Context())
+			acctSvc, err := newAccountService()
+			if err != nil {
+				return err
+			}
+			db, err := openDB(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			return tui.Run(cmd.Context(), acctSvc, folder.NewService(db))
 		},
 	}
 
 	cmd.PersistentFlags().StringVar(&cfgPath, "config", "", "path to config file (default: XDG config dir)")
+	cmd.PersistentFlags().StringVar(&dbPath, "db", "", "path to local sqlite cache (default: XDG cache dir)")
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 
 	cmd.AddCommand(newVersionCmd())
 	cmd.AddCommand(newAccountCmd())
+	cmd.AddCommand(newSyncCmd())
 
 	return cmd
 }
