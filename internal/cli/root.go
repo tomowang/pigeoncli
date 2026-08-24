@@ -6,6 +6,7 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/tui"
@@ -43,7 +44,11 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 
-			return tui.Run(cmd.Context(), acctSvc, folder.NewService(db), message.NewService(db, blobs))
+			folderSvc := folder.NewService(db)
+			messageSvc := message.NewService(db, blobs)
+			composeSvc := compose.NewService(folderSvc)
+
+			return tui.Run(cmd.Context(), acctSvc, folderSvc, messageSvc, composeSvc)
 		},
 	}
 

@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -63,6 +64,45 @@ func testLogin(ctx context.Context, opts DialOptions, provider auth.Provider) er
 	}
 	if err := c.Auth(saslClient); err != nil {
 		return fmt.Errorf("authenticate: %w", err)
+	}
+	if err := c.Quit(); err != nil {
+		return fmt.Errorf("quit: %w", err)
+	}
+	return nil
+}
+
+// Send dials the SMTP server, authenticates using provider, and sends raw
+// (a complete RFC 5322 message, CRLF-terminated lines) as a single message
+// envelope from `from` to every address in `to`.
+func Send(ctx context.Context, opts DialOptions, provider auth.Provider, from string, to []string, raw []byte) error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- send(ctx, opts, provider, from, to, raw)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
+}
+
+func send(ctx context.Context, opts DialOptions, provider auth.Provider, from string, to []string, raw []byte) error {
+	c, err := dial(opts)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", opts.addr(), err)
+	}
+	defer c.Close()
+
+	saslClient, err := provider.SMTPSASLClient(ctx)
+	if err != nil {
+		return fmt.Errorf("credentials: %w", err)
+	}
+	if err := c.Auth(saslClient); err != nil {
+		return fmt.Errorf("authenticate: %w", err)
+	}
+	if err := c.SendMail(from, to, bytes.NewReader(raw)); err != nil {
+		return fmt.Errorf("send mail: %w", err)
 	}
 	if err := c.Quit(); err != nil {
 		return fmt.Errorf("quit: %w", err)

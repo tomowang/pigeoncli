@@ -12,11 +12,14 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tomowang/pigeoncli/internal/core/account"
+	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 )
@@ -42,21 +45,33 @@ const (
 	focusMessages
 )
 
+// composeField identifies which widget in the compose pane has focus.
+type composeField int
+
+const (
+	composeFieldTo composeField = iota
+	composeFieldCc
+	composeFieldSubject
+	composeFieldBody
+)
+
 // App is the root Bubbletea model: an account list, a folder tree pane, and
 // a message list pane side by side, plus a status bar. Opening a message
-// replaces that row with a full-width raw/rendered viewer. Later phases add
-// a compose sub-model/pane here.
+// replaces that row with a full-width raw/rendered viewer; replying from
+// there replaces it with a compose pane (To/Cc/Subject inputs over a body
+// textarea).
 //
 // Update has no context parameter (that's the Elm architecture's shape),
-// but the account/folder/message service calls triggered from tea.Cmd
-// closures still need one — so the ctx passed to Run is stored on the
-// model and reused by every tea.Cmd it builds.
+// but the account/folder/message/compose service calls triggered from
+// tea.Cmd closures still need one — so the ctx passed to Run is stored on
+// the model and reused by every tea.Cmd it builds.
 type App struct {
 	ctx context.Context
 
 	accountSvc *account.Service
 	folderSvc  *folder.Service
 	messageSvc *message.Service
+	composeSvc *compose.Service
 
 	width, height int
 	focus         focusPane
@@ -73,9 +88,18 @@ type App struct {
 	viewingRaw bool
 	viewBody   message.Body
 	viewport   viewport.Model
+
+	composing         bool
+	composeField      composeField
+	composeTo         textinput.Model
+	composeCc         textinput.Model
+	composeSubject    textinput.Model
+	composeBody       textarea.Model
+	composeInReplyTo  string
+	composeReferences string
 }
 
-func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service) App {
+func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service) App {
 	accounts := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	accounts.Title = "Accounts"
 	accounts.SetShowHelp(false)
@@ -93,6 +117,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		accountSvc: accountSvc,
 		folderSvc:  folderSvc,
 		messageSvc: messageSvc,
+		composeSvc: composeSvc,
 		accounts:   accounts,
 		folders:    folders,
 		messages:   messages,
@@ -122,6 +147,10 @@ type messageBodyLoadedMsg struct {
 	msg  message.Message
 	body message.Body
 	err  error
+}
+
+type sendResultMsg struct {
+	err error
 }
 
 func (m App) loadAccountsCmd() tea.Cmd {
@@ -227,11 +256,31 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoTop()
 		return m, nil
 
-	case tea.KeyMsg:
-		if m.viewingMsg != nil {
-			return m.updateViewing(msg)
+	case sendResultMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("send failed: %v", msg.err)
+			return m, nil
 		}
-		switch msg.String() {
+		m.composing = false
+		m.status = "Message sent."
+		return m, nil
+	}
+
+	if m.composing {
+		return m.updateComposing(msg)
+	}
+
+	if m.viewingMsg != nil {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			return m.updateViewing(key)
+		}
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "tab":
@@ -282,7 +331,7 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "backspace":
 		m.viewingMsg = nil
 		return m, nil
-	case "r":
+	case "t":
 		m.viewingRaw = !m.viewingRaw
 		if m.viewingRaw {
 			m.viewport.SetContent(string(m.viewBody.Raw))
@@ -291,6 +340,10 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.viewport.GotoTop()
 		return m, nil
+	case "r":
+		return m.startReply(false)
+	case "R":
+		return m.startReply(true)
 	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -298,8 +351,8 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // layout recomputes each pane's size from the current window size. Each
-// pane is wrapped in a bordered box (see View), which costs 2 columns and
-// 2 rows, so that's subtracted from what's handed to the list widgets.
+// list pane is wrapped in a bordered box (see View), which costs 2 columns
+// and 2 rows, so that's subtracted from what's handed to the list widgets.
 func (m *App) layout() {
 	const borderWidth, borderHeight = 2, 2
 
@@ -314,9 +367,21 @@ func (m *App) layout() {
 
 	m.viewport.Width = m.width
 	m.viewport.Height = max(m.height-2, 1) // reserve the header and status bar rows
+
+	if m.composing {
+		m.composeTo.Width = max(m.width-4, 10)
+		m.composeCc.Width = max(m.width-4, 10)
+		m.composeSubject.Width = max(m.width-4, 10)
+		m.composeBody.SetWidth(max(m.width-2, 10))
+		m.composeBody.SetHeight(max(m.height-5, 3)) // reserve To/Cc/Subject + status bar
+	}
 }
 
 func (m App) View() string {
+	if m.composing {
+		return m.viewCompose()
+	}
+
 	if m.viewingMsg != nil {
 		header := viewHeaderStyle.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
 		return header + "\n" + m.viewport.View() + "\n" + statusBarStyle.Render(m.statusLine())
@@ -344,19 +409,22 @@ func (m App) statusLine() string {
 	if m.status != "" {
 		return m.status
 	}
+	if m.composing {
+		return "pigeon — compose — tab: next field · ctrl+s: send · esc: cancel"
+	}
 	if m.viewingMsg != nil {
 		mode := "rendered"
 		if m.viewingRaw {
 			mode = "raw"
 		}
-		return fmt.Sprintf("pigeon — viewing (%s) — r: toggle raw · esc: back · q: quit", mode)
+		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · esc: back · q: quit", mode)
 	}
 	return "pigeon — tab: switch pane · enter: open · q: quit"
 }
 
 // Run starts the Bubbletea program. It blocks until the user quits.
-func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service) error {
-	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc), tea.WithContext(ctx), tea.WithAltScreen())
+func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service) error {
+	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc, composeSvc), tea.WithContext(ctx), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}
