@@ -9,6 +9,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/config"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
+	"github.com/tomowang/pigeoncli/internal/core/signature"
 	"github.com/tomowang/pigeoncli/internal/mime"
 	"github.com/tomowang/pigeoncli/internal/smtp"
 )
@@ -30,18 +31,35 @@ type Service struct {
 	// after a successful send so a server-side copy in Sent shows up
 	// locally. It may be nil, in which case Send skips that step.
 	folderSvc *folder.Service
+	// signatureSvc supplies the default signature appended to new reply
+	// drafts. It may be nil, in which case NewReply appends none.
+	signatureSvc *signature.Service
 }
 
 // NewService creates a Service. folderSvc may be nil to skip the
-// post-send folder refresh (e.g. in contexts without a local cache).
-func NewService(folderSvc *folder.Service) *Service {
-	return &Service{folderSvc: folderSvc}
+// post-send folder refresh, and signatureSvc may be nil to skip signature
+// insertion (e.g. in contexts without a local cache).
+func NewService(folderSvc *folder.Service, signatureSvc *signature.Service) *Service {
+	return &Service{folderSvc: folderSvc, signatureSvc: signatureSvc}
 }
 
 // NewReply builds a reply (or, if replyAll, reply-all) draft to orig,
-// quoting origBody and addressed based on cfg's own address (so cfg's
-// address is excluded from the reply-all recipient list).
-func NewReply(cfg config.Account, orig message.Message, origBody message.Body, replyAll bool) Draft {
+// quoting origBody, addressed based on cfg's own address (so cfg's address
+// is excluded from the reply-all recipient list), with cfg's default
+// signature appended if one is configured.
+func (s *Service) NewReply(ctx context.Context, cfg config.Account, orig message.Message, origBody message.Body, replyAll bool) Draft {
+	draft := buildReplyDraft(cfg, orig, origBody, replyAll)
+	if s.signatureSvc != nil {
+		if sig, ok, err := s.signatureSvc.Default(ctx, cfg.Slug); err == nil && ok {
+			draft.Body += "\n-- \n" + sig.Body + "\n"
+		}
+	}
+	return draft
+}
+
+// buildReplyDraft is NewReply's pure part: addressing and quoting, with no
+// signature or other side effects, kept separate so it's cheap to test.
+func buildReplyDraft(cfg config.Account, orig message.Message, origBody message.Body, replyAll bool) Draft {
 	self := strings.ToLower(cfg.Email)
 	seen := map[string]bool{self: true, strings.ToLower(orig.FromAddr): true}
 

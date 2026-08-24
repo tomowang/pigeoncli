@@ -9,6 +9,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
+	"github.com/tomowang/pigeoncli/internal/core/signature"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
 
@@ -46,7 +47,8 @@ func newRootCmd() *cobra.Command {
 
 			folderSvc := folder.NewService(db)
 			messageSvc := message.NewService(db, blobs)
-			composeSvc := compose.NewService(folderSvc)
+			signatureSvc := signature.NewService(db)
+			composeSvc := compose.NewService(folderSvc, signatureSvc)
 
 			return tui.Run(cmd.Context(), acctSvc, folderSvc, messageSvc, composeSvc)
 		},
@@ -60,6 +62,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newVersionCmd())
 	cmd.AddCommand(newAccountCmd())
 	cmd.AddCommand(newSyncCmd())
+	cmd.AddCommand(newSignatureCmd())
 
 	return cmd
 }

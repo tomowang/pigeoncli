@@ -12,14 +12,14 @@ import (
 )
 
 // startReply builds a reply (or reply-all) draft for the message currently
-// being viewed and switches into the compose pane. All reply/quoting logic
-// lives in core/compose.NewReply — this just renders the resulting Draft
-// into the compose widgets.
+// being viewed and switches into the compose pane. All reply/quoting/
+// signature logic lives in core/compose.Service.NewReply — this just
+// renders the resulting Draft into the compose widgets.
 func (m App) startReply(replyAll bool) (tea.Model, tea.Cmd) {
 	if m.viewingMsg == nil {
 		return m, nil
 	}
-	draft := compose.NewReply(m.selectedAccount, *m.viewingMsg, m.viewBody, replyAll)
+	draft := m.composeSvc.NewReply(m.ctx, m.selectedAccount, *m.viewingMsg, m.viewBody, replyAll)
 
 	m.composeTo = textinput.New()
 	m.composeTo.Prompt = "To: "

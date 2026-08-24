@@ -1,12 +1,15 @@
 package compose
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tomowang/pigeoncli/internal/config"
 	"github.com/tomowang/pigeoncli/internal/core/message"
+	"github.com/tomowang/pigeoncli/internal/core/signature"
+	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
 
 func testOrig() (message.Message, message.Body) {
@@ -28,7 +31,7 @@ func TestNewReplyAddressesOnlySender(t *testing.T) {
 	cfg := config.Account{Email: "me@example.com"}
 	orig, body := testOrig()
 
-	d := NewReply(cfg, orig, body, false)
+	d := buildReplyDraft(cfg, orig, body, false)
 	if len(d.To) != 1 || d.To[0] != "alice@example.com" {
 		t.Fatalf("unexpected To: %+v", d.To)
 	}
@@ -50,7 +53,7 @@ func TestNewReplyAllExcludesSelfAndSender(t *testing.T) {
 	cfg := config.Account{Email: "me@example.com"}
 	orig, body := testOrig()
 
-	d := NewReply(cfg, orig, body, true)
+	d := buildReplyDraft(cfg, orig, body, true)
 	if len(d.To) != 2 || d.To[0] != "alice@example.com" || d.To[1] != "carol@example.com" {
 		t.Fatalf("unexpected To: %+v", d.To)
 	}
@@ -64,8 +67,45 @@ func TestNewReplyDoesNotDoublePrefixSubject(t *testing.T) {
 	orig, body := testOrig()
 	orig.Subject = "Re: Hi"
 
-	d := NewReply(cfg, orig, body, false)
+	d := buildReplyDraft(cfg, orig, body, false)
 	if d.Subject != "Re: Hi" {
 		t.Fatalf("Subject = %q, want %q", d.Subject, "Re: Hi")
+	}
+}
+
+func TestServiceNewReplyAppendsDefaultSignature(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	sigSvc := signature.NewService(db)
+	if _, err := sigSvc.Add(ctx, "", "Global", "-- \nSent from pigeon", true); err != nil {
+		t.Fatalf("Add signature: %v", err)
+	}
+
+	svc := NewService(nil, sigSvc)
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	orig, body := testOrig()
+
+	d := svc.NewReply(ctx, cfg, orig, body, false)
+	if !strings.Contains(d.Body, "Sent from pigeon") {
+		t.Fatalf("expected signature appended, got body: %q", d.Body)
+	}
+	if !strings.Contains(d.Body, "> Original body.") {
+		t.Fatalf("expected quoted body preserved, got: %q", d.Body)
+	}
+}
+
+func TestServiceNewReplyWithoutSignatureServiceSkipsSignature(t *testing.T) {
+	svc := NewService(nil, nil)
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	orig, body := testOrig()
+
+	d := svc.NewReply(context.Background(), cfg, orig, body, false)
+	if strings.Contains(d.Body, "-- ") {
+		t.Fatalf("expected no signature appended, got body: %q", d.Body)
 	}
 }
