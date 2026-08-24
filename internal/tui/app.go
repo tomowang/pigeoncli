@@ -10,6 +10,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -76,6 +77,7 @@ type App struct {
 	width, height int
 	focus         focusPane
 	status        string
+	showHelp      bool
 
 	accounts list.Model
 	folders  list.Model
@@ -153,6 +155,10 @@ type sendResultMsg struct {
 	err error
 }
 
+type syncResultMsg struct {
+	err error
+}
+
 func (m App) loadAccountsCmd() tea.Cmd {
 	return func() tea.Msg {
 		accounts, err := m.accountSvc.List(m.ctx)
@@ -180,6 +186,13 @@ func (m App) openMessageCmd(msg message.Message) tea.Cmd {
 	return func() tea.Msg {
 		body, err := m.messageSvc.Body(m.ctx, cfg, folderPath, msg.UID)
 		return messageBodyLoadedMsg{msg: msg, body: body, err: err}
+	}
+}
+
+func (m App) syncSelectedAccountCmd() tea.Cmd {
+	cfg := m.selectedAccount
+	return func() tea.Msg {
+		return syncResultMsg{err: m.folderSvc.Sync(m.ctx, cfg, nil)}
 	}
 }
 
@@ -222,13 +235,22 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = folderItem(f)
 		}
 		m.folders.SetItems(items)
-		m.status = ""
 		if len(msg.folders) == 0 {
 			m.messages.SetItems(nil)
+			m.selectedFolder = ""
 			return m, nil
 		}
-		m.selectedFolder = msg.folders[0].Path
-		return m, m.loadMessagesCmd(msg.slug, msg.folders[0].Path)
+		// Keep the currently selected folder if it still exists (e.g. after
+		// a sync refresh); otherwise default to the first folder.
+		target := msg.folders[0].Path
+		for _, f := range msg.folders {
+			if f.Path == m.selectedFolder {
+				target = f.Path
+				break
+			}
+		}
+		m.selectedFolder = target
+		return m, m.loadMessagesCmd(msg.slug, target)
 
 	case messagesLoadedMsg:
 		if msg.err != nil {
@@ -241,7 +263,6 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = messageItem(mm)
 		}
 		m.messages.SetItems(items)
-		m.status = ""
 		return m, nil
 
 	case messageBodyLoadedMsg:
@@ -254,6 +275,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewingRaw = false
 		m.viewport.SetContent(msg.body.PlainText)
 		m.viewport.GotoTop()
+		m.status = ""
 		return m, nil
 
 	case sendResultMsg:
@@ -263,6 +285,26 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.composing = false
 		m.status = "Message sent."
+		// Service.Send already refreshed the sqlite cache (e.g. a Sent
+		// copy); reload folders so this pane's counts reflect that too.
+		return m, m.loadFoldersCmd(m.selectedAccount.Slug)
+
+	case syncResultMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("sync failed: %v", msg.err)
+			return m, nil
+		}
+		m.status = "Sync complete."
+		return m, m.loadFoldersCmd(m.selectedAccount.Slug)
+	}
+
+	if m.showHelp {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			if key.String() == "q" || key.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			m.showHelp = false
+		}
 		return m, nil
 	}
 
@@ -283,11 +325,27 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch key.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "?":
+			m.showHelp = true
+			return m, nil
 		case "tab":
 			m.focus = (m.focus + 1) % 3
 			return m, nil
 		case "enter":
 			return m.openSelection()
+		case "c":
+			if m.selectedAccount.Slug == "" {
+				m.status = "No account selected."
+				return m, nil
+			}
+			return m.startNewMessage()
+		case "s":
+			if m.selectedAccount.Slug == "" {
+				m.status = "No account selected."
+				return m, nil
+			}
+			m.status = "Syncing..."
+			return m, m.syncSelectedAccountCmd()
 		}
 	}
 
@@ -378,6 +436,10 @@ func (m *App) layout() {
 }
 
 func (m App) View() string {
+	if m.showHelp {
+		return m.viewHelp()
+	}
+
 	if m.composing {
 		return m.viewCompose()
 	}
@@ -419,7 +481,36 @@ func (m App) statusLine() string {
 		}
 		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · esc: back · q: quit", mode)
 	}
-	return "pigeon — tab: switch pane · enter: open · q: quit"
+	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · ?: help · q: quit"
+}
+
+func (m App) viewHelp() string {
+	lines := []string{
+		"pigeon — keybindings",
+		"",
+		"Navigation",
+		"  tab            switch pane (accounts / folders / messages)",
+		"  ↑/↓, j/k       move selection, scroll",
+		"  enter          open selection",
+		"  c              compose a new message",
+		"  s              sync the selected account",
+		"  ?              toggle this help",
+		"  q, ctrl+c      quit",
+		"",
+		"Message viewer",
+		"  r              reply",
+		"  R              reply-all",
+		"  t              toggle raw / rendered",
+		"  esc            back to message list",
+		"",
+		"Compose",
+		"  tab            next field (To / Cc / Subject / Body)",
+		"  ctrl+s         send",
+		"  esc            cancel",
+		"",
+		"Press any key to close.",
+	}
+	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
 }
 
 // Run starts the Bubbletea program. It blocks until the user quits.

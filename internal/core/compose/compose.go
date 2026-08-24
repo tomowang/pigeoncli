@@ -49,12 +49,29 @@ func NewService(folderSvc *folder.Service, signatureSvc *signature.Service) *Ser
 // signature appended if one is configured.
 func (s *Service) NewReply(ctx context.Context, cfg config.Account, orig message.Message, origBody message.Body, replyAll bool) Draft {
 	draft := buildReplyDraft(cfg, orig, origBody, replyAll)
-	if s.signatureSvc != nil {
-		if sig, ok, err := s.signatureSvc.Default(ctx, cfg.Slug); err == nil && ok {
-			draft.Body += "\n-- \n" + sig.Body + "\n"
-		}
-	}
+	draft.Body = s.appendSignature(ctx, cfg, draft.Body)
 	return draft
+}
+
+// NewMessage builds an empty draft for composing a new message from
+// scratch (no recipients, subject, or quoted body), with cfg's default
+// signature pre-filled if one is configured.
+func (s *Service) NewMessage(ctx context.Context, cfg config.Account) Draft {
+	return Draft{Body: s.appendSignature(ctx, cfg, "")}
+}
+
+func (s *Service) appendSignature(ctx context.Context, cfg config.Account, body string) string {
+	if s.signatureSvc == nil {
+		return body
+	}
+	sig, ok, err := s.signatureSvc.Default(ctx, cfg.Slug)
+	if err != nil || !ok {
+		return body
+	}
+	if body != "" {
+		body += "\n"
+	}
+	return body + "-- \n" + sig.Body + "\n"
 }
 
 // buildReplyDraft is NewReply's pure part: addressing and quoting, with no

@@ -14,13 +14,28 @@ import (
 // startReply builds a reply (or reply-all) draft for the message currently
 // being viewed and switches into the compose pane. All reply/quoting/
 // signature logic lives in core/compose.Service.NewReply — this just
-// renders the resulting Draft into the compose widgets.
+// renders the resulting Draft into the compose widgets. Focus starts on
+// the body, since To/Cc/Subject are already filled in.
 func (m App) startReply(replyAll bool) (tea.Model, tea.Cmd) {
 	if m.viewingMsg == nil {
 		return m, nil
 	}
 	draft := m.composeSvc.NewReply(m.ctx, m.selectedAccount, *m.viewingMsg, m.viewBody, replyAll)
+	m.viewingMsg = nil
+	return m.enterCompose(draft, composeFieldBody), nil
+}
 
+// startNewMessage builds an empty draft (just the account's default
+// signature, if any) and switches into the compose pane. Focus starts on
+// To, since there's nothing pre-filled to edit.
+func (m App) startNewMessage() (tea.Model, tea.Cmd) {
+	draft := m.composeSvc.NewMessage(m.ctx, m.selectedAccount)
+	return m.enterCompose(draft, composeFieldTo), nil
+}
+
+// enterCompose renders draft into fresh compose widgets, focuses field,
+// and switches the view into compose mode.
+func (m App) enterCompose(draft compose.Draft, field composeField) App {
 	m.composeTo = textinput.New()
 	m.composeTo.Prompt = "To: "
 	m.composeTo.SetValue(strings.Join(draft.To, ", "))
@@ -39,14 +54,22 @@ func (m App) startReply(replyAll bool) (tea.Model, tea.Cmd) {
 	m.composeInReplyTo = draft.InReplyTo
 	m.composeReferences = draft.References
 
-	m.viewingMsg = nil
 	m.composing = true
 	m.status = ""
-	m.composeField = composeFieldBody
-	m.composeBody.Focus()
+	m.composeField = field
+	switch field {
+	case composeFieldTo:
+		m.composeTo.Focus()
+	case composeFieldCc:
+		m.composeCc.Focus()
+	case composeFieldSubject:
+		m.composeSubject.Focus()
+	case composeFieldBody:
+		m.composeBody.Focus()
+	}
 
 	m.layout()
-	return m, nil
+	return m
 }
 
 // updateComposing handles input while the compose pane is active. Global

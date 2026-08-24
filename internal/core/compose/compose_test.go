@@ -109,3 +109,38 @@ func TestServiceNewReplyWithoutSignatureServiceSkipsSignature(t *testing.T) {
 		t.Fatalf("expected no signature appended, got body: %q", d.Body)
 	}
 }
+
+func TestNewMessageIsEmptyWithSignature(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	sigSvc := signature.NewService(db)
+	if _, err := sigSvc.Add(ctx, "", "Global", "-- \nSent from pigeon", true); err != nil {
+		t.Fatalf("Add signature: %v", err)
+	}
+
+	svc := NewService(nil, sigSvc)
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+
+	d := svc.NewMessage(ctx, cfg)
+	if len(d.To) != 0 || len(d.Cc) != 0 || d.Subject != "" || d.InReplyTo != "" {
+		t.Fatalf("expected an otherwise-empty draft, got %+v", d)
+	}
+	if !strings.Contains(d.Body, "Sent from pigeon") {
+		t.Fatalf("expected signature in new-message body, got %q", d.Body)
+	}
+}
+
+func TestNewMessageWithoutSignatureServiceIsEmpty(t *testing.T) {
+	svc := NewService(nil, nil)
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+
+	d := svc.NewMessage(context.Background(), cfg)
+	if d.Body != "" {
+		t.Fatalf("expected empty body, got %q", d.Body)
+	}
+}
