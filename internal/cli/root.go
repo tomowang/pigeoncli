@@ -19,6 +19,10 @@ func newRootCmd() *cobra.Command {
 		Use:   "pigeon",
 		Short: "pigeon is a local email client (TUI/CLI)",
 		Long:  "pigeon is a local email client with IMAP/SMTP support, a terminal UI, and a CLI.",
+		// main.go prints the returned error itself; don't let cobra print it
+		// a second time or dump usage for runtime (non-flag-parsing) errors.
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return tui.Run(cmd.Context())
 		},
@@ -28,6 +32,7 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 
 	cmd.AddCommand(newVersionCmd())
+	cmd.AddCommand(newAccountCmd())
 
 	return cmd
 }
