@@ -12,11 +12,13 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
+	"github.com/tomowang/pigeoncli/internal/core/message"
 )
 
 var (
@@ -28,6 +30,8 @@ var (
 
 	activePaneStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
 	inactivePaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+
+	viewHeaderStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1)
 )
 
 type focusPane int
@@ -35,21 +39,24 @@ type focusPane int
 const (
 	focusAccounts focusPane = iota
 	focusFolders
+	focusMessages
 )
 
-// App is the root Bubbletea model: an account list and a folder tree pane
-// side by side, plus a status bar. Later phases add message list/view and
-// compose sub-models/panes here.
+// App is the root Bubbletea model: an account list, a folder tree pane, and
+// a message list pane side by side, plus a status bar. Opening a message
+// replaces that row with a full-width raw/rendered viewer. Later phases add
+// a compose sub-model/pane here.
 //
 // Update has no context parameter (that's the Elm architecture's shape),
-// but the account/folder service calls triggered from tea.Cmd closures
-// still need one — so the ctx passed to Run is stored on the model and
-// reused by every tea.Cmd it builds.
+// but the account/folder/message service calls triggered from tea.Cmd
+// closures still need one — so the ctx passed to Run is stored on the
+// model and reused by every tea.Cmd it builds.
 type App struct {
 	ctx context.Context
 
 	accountSvc *account.Service
 	folderSvc  *folder.Service
+	messageSvc *message.Service
 
 	width, height int
 	focus         focusPane
@@ -57,9 +64,18 @@ type App struct {
 
 	accounts list.Model
 	folders  list.Model
+	messages list.Model
+
+	selectedAccount account.Account
+	selectedFolder  string
+
+	viewingMsg *message.Message
+	viewingRaw bool
+	viewBody   message.Body
+	viewport   viewport.Model
 }
 
-func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service) App {
+func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service) App {
 	accounts := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	accounts.Title = "Accounts"
 	accounts.SetShowHelp(false)
@@ -68,12 +84,19 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 	folders.Title = "Folders"
 	folders.SetShowHelp(false)
 
+	messages := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	messages.Title = "Messages"
+	messages.SetShowHelp(false)
+
 	return App{
 		ctx:        ctx,
 		accountSvc: accountSvc,
 		folderSvc:  folderSvc,
+		messageSvc: messageSvc,
 		accounts:   accounts,
 		folders:    folders,
+		messages:   messages,
+		viewport:   viewport.New(0, 0),
 	}
 }
 
@@ -88,6 +111,19 @@ type foldersLoadedMsg struct {
 	err     error
 }
 
+type messagesLoadedMsg struct {
+	accountSlug string
+	folderPath  string
+	messages    []message.Message
+	err         error
+}
+
+type messageBodyLoadedMsg struct {
+	msg  message.Message
+	body message.Body
+	err  error
+}
+
 func (m App) loadAccountsCmd() tea.Cmd {
 	return func() tea.Msg {
 		accounts, err := m.accountSvc.List(m.ctx)
@@ -99,6 +135,22 @@ func (m App) loadFoldersCmd(slug string) tea.Cmd {
 	return func() tea.Msg {
 		folders, err := m.folderSvc.List(m.ctx, slug)
 		return foldersLoadedMsg{slug: slug, folders: folders, err: err}
+	}
+}
+
+func (m App) loadMessagesCmd(accountSlug, folderPath string) tea.Cmd {
+	return func() tea.Msg {
+		msgs, err := m.messageSvc.List(m.ctx, accountSlug, folderPath)
+		return messagesLoadedMsg{accountSlug: accountSlug, folderPath: folderPath, messages: msgs, err: err}
+	}
+}
+
+func (m App) openMessageCmd(msg message.Message) tea.Cmd {
+	cfg := m.selectedAccount
+	folderPath := m.selectedFolder
+	return func() tea.Msg {
+		body, err := m.messageSvc.Body(m.ctx, cfg, folderPath, msg.UID)
+		return messageBodyLoadedMsg{msg: msg, body: body, err: err}
 	}
 }
 
@@ -127,6 +179,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "No accounts configured. Add one with `pigeon account add`, then `pigeon sync`."
 			return m, nil
 		}
+		m.selectedAccount = msg.accounts[0]
 		return m, m.loadFoldersCmd(msg.accounts[0].Slug)
 
 	case foldersLoadedMsg:
@@ -141,35 +194,106 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.folders.SetItems(items)
 		m.status = ""
+		if len(msg.folders) == 0 {
+			m.messages.SetItems(nil)
+			return m, nil
+		}
+		m.selectedFolder = msg.folders[0].Path
+		return m, m.loadMessagesCmd(msg.slug, msg.folders[0].Path)
+
+	case messagesLoadedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("load messages for %s: %v", msg.folderPath, msg.err)
+			m.messages.SetItems(nil)
+			return m, nil
+		}
+		items := make([]list.Item, len(msg.messages))
+		for i, mm := range msg.messages {
+			items[i] = messageItem(mm)
+		}
+		m.messages.SetItems(items)
+		m.status = ""
+		return m, nil
+
+	case messageBodyLoadedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("open message: %v", msg.err)
+			return m, nil
+		}
+		m.viewingMsg = &msg.msg
+		m.viewBody = msg.body
+		m.viewingRaw = false
+		m.viewport.SetContent(msg.body.PlainText)
+		m.viewport.GotoTop()
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.viewingMsg != nil {
+			return m.updateViewing(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "tab":
-			if m.focus == focusAccounts {
-				m.focus = focusFolders
-			} else {
-				m.focus = focusAccounts
-			}
+			m.focus = (m.focus + 1) % 3
 			return m, nil
 		case "enter":
-			if m.focus == focusAccounts {
-				if item, ok := m.accounts.SelectedItem().(accountItem); ok {
-					return m, m.loadFoldersCmd(item.Slug)
-				}
-			}
-			return m, nil
+			return m.openSelection()
 		}
 	}
 
 	var cmd tea.Cmd
-	if m.focus == focusAccounts {
+	switch m.focus {
+	case focusAccounts:
 		m.accounts, cmd = m.accounts.Update(msg)
-	} else {
+	case focusFolders:
 		m.folders, cmd = m.folders.Update(msg)
+	case focusMessages:
+		m.messages, cmd = m.messages.Update(msg)
 	}
+	return m, cmd
+}
+
+func (m App) openSelection() (tea.Model, tea.Cmd) {
+	switch m.focus {
+	case focusAccounts:
+		if item, ok := m.accounts.SelectedItem().(accountItem); ok {
+			m.selectedAccount = account.Account(item)
+			return m, m.loadFoldersCmd(item.Slug)
+		}
+	case focusFolders:
+		if item, ok := m.folders.SelectedItem().(folderItem); ok {
+			m.selectedFolder = item.Path
+			return m, m.loadMessagesCmd(m.selectedAccount.Slug, item.Path)
+		}
+	case focusMessages:
+		if item, ok := m.messages.SelectedItem().(messageItem); ok {
+			m.status = "Loading message..."
+			return m, m.openMessageCmd(message.Message(item))
+		}
+	}
+	return m, nil
+}
+
+func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "backspace":
+		m.viewingMsg = nil
+		return m, nil
+	case "r":
+		m.viewingRaw = !m.viewingRaw
+		if m.viewingRaw {
+			m.viewport.SetContent(string(m.viewBody.Raw))
+		} else {
+			m.viewport.SetContent(m.viewBody.PlainText)
+		}
+		m.viewport.GotoTop()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
 }
 
@@ -179,28 +303,39 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *App) layout() {
 	const borderWidth, borderHeight = 2, 2
 
-	leftWidth := m.width / 3
-	if leftWidth < 20 {
-		leftWidth = 20
-	}
-	rightWidth := m.width - leftWidth
+	accountsWidth := max(m.width/5, 16)
+	foldersWidth := max(m.width/5, 16)
+	messagesWidth := max(m.width-accountsWidth-foldersWidth, 16)
 	paneHeight := m.height - 1 // reserve the status bar row
 
-	m.accounts.SetSize(max(leftWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
-	m.folders.SetSize(max(rightWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+	m.accounts.SetSize(max(accountsWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+	m.folders.SetSize(max(foldersWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+	m.messages.SetSize(max(messagesWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+
+	m.viewport.Width = m.width
+	m.viewport.Height = max(m.height-2, 1) // reserve the header and status bar rows
 }
 
 func (m App) View() string {
-	accountsStyle, foldersStyle := inactivePaneStyle, inactivePaneStyle
-	if m.focus == focusAccounts {
+	if m.viewingMsg != nil {
+		header := viewHeaderStyle.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
+		return header + "\n" + m.viewport.View() + "\n" + statusBarStyle.Render(m.statusLine())
+	}
+
+	accountsStyle, foldersStyle, messagesStyle := inactivePaneStyle, inactivePaneStyle, inactivePaneStyle
+	switch m.focus {
+	case focusAccounts:
 		accountsStyle = activePaneStyle
-	} else {
+	case focusFolders:
 		foldersStyle = activePaneStyle
+	case focusMessages:
+		messagesStyle = activePaneStyle
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top,
 		accountsStyle.Render(m.accounts.View()),
 		foldersStyle.Render(m.folders.View()),
+		messagesStyle.Render(m.messages.View()),
 	)
 	return row + "\n" + statusBarStyle.Render(m.statusLine())
 }
@@ -209,12 +344,19 @@ func (m App) statusLine() string {
 	if m.status != "" {
 		return m.status
 	}
-	return "pigeon — tab: switch pane · enter: open account · q: quit"
+	if m.viewingMsg != nil {
+		mode := "rendered"
+		if m.viewingRaw {
+			mode = "raw"
+		}
+		return fmt.Sprintf("pigeon — viewing (%s) — r: toggle raw · esc: back · q: quit", mode)
+	}
+	return "pigeon — tab: switch pane · enter: open · q: quit"
 }
 
 // Run starts the Bubbletea program. It blocks until the user quits.
-func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service) error {
-	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc), tea.WithContext(ctx), tea.WithAltScreen())
+func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service) error {
+	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc), tea.WithContext(ctx), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}

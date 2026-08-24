@@ -172,6 +172,25 @@ func (cl *Client) FetchAllHeaders(ctx context.Context) ([]MessageHeader, error) 
 	return headers, nil
 }
 
+// FetchRawBody fetches the raw RFC 822 source of the message with the
+// given UID in the currently selected mailbox. It uses BODY.PEEK[] so
+// viewing a message doesn't mark it \Seen server-side out from under the
+// local cache.
+func (cl *Client) FetchRawBody(ctx context.Context, uid uint32) ([]byte, error) {
+	uidSet := imap.UIDSetNum(imap.UID(uid))
+
+	bufs, err := cl.c.Fetch(uidSet, &imap.FetchOptions{
+		BodySection: []*imap.FetchItemBodySection{{Peek: true}},
+	}).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("fetch body uid=%d: %w", uid, err)
+	}
+	if len(bufs) == 0 || len(bufs[0].BodySection) == 0 {
+		return nil, fmt.Errorf("message uid=%d: no body returned", uid)
+	}
+	return bufs[0].BodySection[0].Bytes, nil
+}
+
 func headerFromBuffer(b *imapclient.FetchMessageBuffer) MessageHeader {
 	h := MessageHeader{
 		UID:     uint32(b.UID),

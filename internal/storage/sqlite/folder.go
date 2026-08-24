@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -42,6 +43,20 @@ func (db *DB) UpsertFolder(ctx context.Context, accountID int64, path, name, del
 		return 0, fmt.Errorf("load folder id for %q: %w", path, err)
 	}
 	return id, nil
+}
+
+// FolderID looks up the local row id for the folder at path under
+// accountID. It reports false if the folder has never been synced.
+func (db *DB) FolderID(ctx context.Context, accountID int64, path string) (int64, bool, error) {
+	var id int64
+	err := db.QueryRowContext(ctx, "SELECT id FROM folders WHERE account_id = ? AND path = ?", accountID, path).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("load folder id for %q: %w", path, err)
+	}
+	return id, true, nil
 }
 
 // ListFolders returns all folders for accountID, ordered by path.

@@ -97,3 +97,59 @@ func TestAccountFolderMessageLifecycle(t *testing.T) {
 		t.Fatalf("SetAccountSyncedNow: %v", err)
 	}
 }
+
+func TestFolderIDAndMessageBodyState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	accountID, err := db.UpsertAccount(ctx, "work", "me@example.com", "Work")
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+	if _, ok, err := db.FolderID(ctx, accountID, "INBOX"); err != nil || ok {
+		t.Fatalf("FolderID before sync: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	folderID, err := db.UpsertFolder(ctx, accountID, "INBOX", "INBOX", "/", `\Inbox`)
+	if err != nil {
+		t.Fatalf("UpsertFolder: %v", err)
+	}
+	gotID, ok, err := db.FolderID(ctx, accountID, "INBOX")
+	if err != nil || !ok || gotID != folderID {
+		t.Fatalf("FolderID: got id=%d ok=%v err=%v, want id=%d ok=true", gotID, ok, err, folderID)
+	}
+
+	headers := []MessageHeader{
+		{UID: 1, Subject: "Hello", FromAddr: "a@example.com", ToAddrs: []string{"me@example.com"}, Date: time.Now(), Flags: []string{`\Seen`}},
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, folderID, headers); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	msgs, err := db.ListMessages(ctx, folderID, 10)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Subject != "Hello" || len(msgs[0].ToAddrs) != 1 {
+		t.Fatalf("unexpected messages: %+v", msgs)
+	}
+
+	ref, synced, err := db.MessageBodyState(ctx, folderID, 1)
+	if err != nil {
+		t.Fatalf("MessageBodyState: %v", err)
+	}
+	if synced || ref != "" {
+		t.Fatalf("expected unsynced body before caching, got ref=%q synced=%v", ref, synced)
+	}
+
+	if err := db.SetMessageBodyCached(ctx, folderID, 1, "1/1/1.eml"); err != nil {
+		t.Fatalf("SetMessageBodyCached: %v", err)
+	}
+	ref, synced, err = db.MessageBodyState(ctx, folderID, 1)
+	if err != nil {
+		t.Fatalf("MessageBodyState after cache: %v", err)
+	}
+	if !synced || ref != "1/1/1.eml" {
+		t.Fatalf("expected cached body state, got ref=%q synced=%v", ref, synced)
+	}
+}

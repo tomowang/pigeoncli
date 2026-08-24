@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -148,4 +149,80 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 	}
 
 	return tx.Commit()
+}
+
+// MessageRow is a cached message's header fields, as read back for display.
+type MessageRow struct {
+	UID       uint32
+	MessageID string
+	InReplyTo string
+	Subject   string
+	FromName  string
+	FromAddr  string
+	ToAddrs   []string
+	CcAddrs   []string
+	Date      time.Time
+	Flags     []string
+	Size      int64
+}
+
+// ListMessages returns up to limit cached messages for folderID, most
+// recent first.
+func (db *DB) ListMessages(ctx context.Context, folderID int64, limit int) ([]MessageRow, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT uid, message_id, in_reply_to, subject, from_name, from_addr, to_addrs, cc_addrs, date, flags, size
+		FROM messages WHERE folder_id = ? ORDER BY date DESC, uid DESC LIMIT ?
+	`, folderID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list messages: %w", err)
+	}
+	defer rows.Close()
+
+	var out []MessageRow
+	for rows.Next() {
+		var m MessageRow
+		var toJSON, ccJSON, flagsJSON string
+		var date sql.NullTime
+		if err := rows.Scan(&m.UID, &m.MessageID, &m.InReplyTo, &m.Subject, &m.FromName, &m.FromAddr,
+			&toJSON, &ccJSON, &date, &flagsJSON, &m.Size); err != nil {
+			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		m.Date = date.Time
+		if err := json.Unmarshal([]byte(toJSON), &m.ToAddrs); err != nil {
+			return nil, fmt.Errorf("decode to_addrs for uid=%d: %w", m.UID, err)
+		}
+		if err := json.Unmarshal([]byte(ccJSON), &m.CcAddrs); err != nil {
+			return nil, fmt.Errorf("decode cc_addrs for uid=%d: %w", m.UID, err)
+		}
+		if err := json.Unmarshal([]byte(flagsJSON), &m.Flags); err != nil {
+			return nil, fmt.Errorf("decode flags for uid=%d: %w", m.UID, err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MessageBodyState reports whether a message's raw body has already been
+// fetched and cached, and if so, the blob store reference it was cached
+// under.
+func (db *DB) MessageBodyState(ctx context.Context, folderID int64, uid uint32) (rawRef string, bodySynced bool, err error) {
+	var ref sql.NullString
+	var synced bool
+	err = db.QueryRowContext(ctx, "SELECT raw_ref, body_synced FROM messages WHERE folder_id = ? AND uid = ?", folderID, uid).
+		Scan(&ref, &synced)
+	if err != nil {
+		return "", false, fmt.Errorf("load body state for uid=%d: %w", uid, err)
+	}
+	return ref.String, synced, nil
+}
+
+// SetMessageBodyCached records that a message's raw body has been fetched
+// and cached under rawRef.
+func (db *DB) SetMessageBodyCached(ctx context.Context, folderID int64, uid uint32, rawRef string) error {
+	_, err := db.ExecContext(ctx, "UPDATE messages SET raw_ref = ?, body_synced = 1 WHERE folder_id = ? AND uid = ?",
+		rawRef, folderID, uid)
+	if err != nil {
+		return fmt.Errorf("set body cached for uid=%d: %w", uid, err)
+	}
+	return nil
 }

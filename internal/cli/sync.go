@@ -9,6 +9,7 @@ import (
 
 	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
+	"github.com/tomowang/pigeoncli/internal/storage/blob"
 	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
 
@@ -25,6 +26,18 @@ func openDB(ctx context.Context) (*sqlite.DB, error) {
 		return nil, err
 	}
 	return sqlite.Open(ctx, path)
+}
+
+func newBlobStore() (*blob.Store, error) {
+	dir := blobDir
+	if dir == "" {
+		var err error
+		dir, err = blob.DefaultDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return blob.NewStore(dir), nil
 }
 
 func newSyncCmd() *cobra.Command {

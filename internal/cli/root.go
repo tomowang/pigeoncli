@@ -7,12 +7,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tomowang/pigeoncli/internal/core/folder"
+	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
 
 var (
 	cfgPath  string
 	dbPath   string
+	blobDir  string
 	logLevel string
 )
 
@@ -36,12 +38,18 @@ func newRootCmd() *cobra.Command {
 			}
 			defer db.Close()
 
-			return tui.Run(cmd.Context(), acctSvc, folder.NewService(db))
+			blobs, err := newBlobStore()
+			if err != nil {
+				return err
+			}
+
+			return tui.Run(cmd.Context(), acctSvc, folder.NewService(db), message.NewService(db, blobs))
 		},
 	}
 
 	cmd.PersistentFlags().StringVar(&cfgPath, "config", "", "path to config file (default: XDG config dir)")
 	cmd.PersistentFlags().StringVar(&dbPath, "db", "", "path to local sqlite cache (default: XDG cache dir)")
+	cmd.PersistentFlags().StringVar(&blobDir, "blobs", "", "path to local message body cache (default: XDG cache dir)")
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 
 	cmd.AddCommand(newVersionCmd())

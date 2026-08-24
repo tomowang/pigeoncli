@@ -5,6 +5,7 @@ import (
 
 	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
+	"github.com/tomowang/pigeoncli/internal/core/message"
 )
 
 // accountItem adapts account.Account to bubbles/list's Item/DefaultItem.
@@ -28,4 +29,33 @@ func (f folderItem) Title() string {
 
 func (f folderItem) Description() string {
 	return fmt.Sprintf("%d messages", f.TotalCount)
+}
+
+// messageItem adapts message.Message to bubbles/list's Item/DefaultItem.
+type messageItem message.Message
+
+func (m messageItem) FilterValue() string { return m.Subject }
+
+func (m messageItem) Title() string {
+	if !hasFlag(m.Flags, `\Seen`) {
+		return "* " + m.Subject
+	}
+	return m.Subject
+}
+
+func (m messageItem) Description() string {
+	from := m.FromAddr
+	if m.FromName != "" {
+		from = m.FromName
+	}
+	return fmt.Sprintf("%s — %s", from, m.Date.Format("2006-01-02 15:04"))
+}
+
+func hasFlag(flags []string, want string) bool {
+	for _, f := range flags {
+		if f == want {
+			return true
+		}
+	}
+	return false
 }
