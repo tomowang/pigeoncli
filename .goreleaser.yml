@@ -1,0 +1,37 @@
+version: 2
+
+builds:
+  - id: pigeon
+    main: ./cmd/pigeon
+    binary: pigeon
+    env:
+      - CGO_ENABLED=0 # modernc.org/sqlite is pure Go — safe to cross-compile
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/tomowang/pigeoncli/internal/buildinfo.Version={{.Version}}
+      - -X github.com/tomowang/pigeoncli/internal/buildinfo.Commit={{.Commit}}
+      - -X github.com/tomowang/pigeoncli/internal/buildinfo.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"

@@ -7,7 +7,7 @@ LDFLAGS    := -X $(MODULE)/internal/buildinfo.Version=$(VERSION) \
               -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) \
               -X $(MODULE)/internal/buildinfo.Date=$(DATE)
 
-.PHONY: build run test vet lint tidy clean
+.PHONY: build run test vet lint tidy clean release-check release-dry-run
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/pigeon
@@ -29,3 +29,11 @@ tidy:
 
 clean:
 	rm -rf bin/
+
+# release-check/release-dry-run require goreleaser (https://goreleaser.com)
+# on PATH; the release workflow itself only runs in CI on a pushed tag.
+release-check:
+	goreleaser check
+
+release-dry-run:
+	goreleaser release --snapshot --clean
