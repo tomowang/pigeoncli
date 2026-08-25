@@ -3,6 +3,7 @@ package imap
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -130,17 +131,18 @@ func (cl *Client) SelectFolder(ctx context.Context, path string) (uidValidity, u
 
 // MessageHeader is a message's header fields as fetched from IMAP.
 type MessageHeader struct {
-	UID       uint32
-	MessageID string
-	InReplyTo string
-	Subject   string
-	FromName  string
-	FromAddr  string
-	ToAddrs   []string
-	CcAddrs   []string
-	Date      time.Time
-	Flags     []string
-	Size      int64
+	UID        uint32
+	MessageID  string
+	InReplyTo  string
+	References []string
+	Subject    string
+	FromName   string
+	FromAddr   string
+	ToAddrs    []string
+	CcAddrs    []string
+	Date       time.Time
+	Flags      []string
+	Size       int64
 }
 
 // FetchAllHeaders fetches envelope/flags/size for every message currently
@@ -155,11 +157,17 @@ func (cl *Client) FetchAllHeaders(ctx context.Context) ([]MessageHeader, error) 
 	var uidSet imap.UIDSet
 	uidSet.AddRange(1, 0) // "1:*"
 
+	// ENVELOPE (RFC 3501) only carries In-Reply-To, never References, so
+	// References needs its own raw-header fetch. BODY.PEEK[HEADER.FIELDS
+	// (References)] doesn't mark messages \Seen server-side.
 	bufs, err := cl.c.Fetch(uidSet, &imap.FetchOptions{
 		Envelope:   true,
 		Flags:      true,
 		RFC822Size: true,
 		UID:        true,
+		BodySection: []*imap.FetchItemBodySection{
+			{Specifier: imap.PartSpecifierHeader, HeaderFields: []string{"References"}, Peek: true},
+		},
 	}).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("fetch headers: %w", err)
@@ -209,11 +217,32 @@ func headerFromBuffer(b *imapclient.FetchMessageBuffer) MessageHeader {
 	if len(b.Envelope.InReplyTo) > 0 {
 		h.InReplyTo = b.Envelope.InReplyTo[0]
 	}
+	if len(b.BodySection) > 0 {
+		h.References = parseReferences(b.BodySection[0].Bytes)
+	}
 	h.Flags = make([]string, len(b.Flags))
 	for i, f := range b.Flags {
 		h.Flags[i] = string(f)
 	}
 	return h
+}
+
+// referenceIDRe matches one <message-id> token in a raw References header
+// value.
+var referenceIDRe = regexp.MustCompile(`<[^<>]+>`)
+
+// parseReferences extracts message-IDs from a raw "References: <a> <b>\r\n"
+// header field fetch, in order, stripped of their angle brackets.
+func parseReferences(raw []byte) []string {
+	matches := referenceIDRe.FindAll(raw, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	ids := make([]string, len(matches))
+	for i, m := range matches {
+		ids[i] = string(m[1 : len(m)-1])
+	}
+	return ids
 }
 
 func addrStrings(addrs []imap.Address) []string {
