@@ -38,8 +38,19 @@ type Message struct {
 // Body is a message's content, both as originally received and rendered
 // to best-effort plain text.
 type Body struct {
-	Raw       []byte
-	PlainText string
+	Raw         []byte
+	PlainText   string
+	Attachments []Attachment
+}
+
+// Attachment is one attachment's metadata, mirroring internal/mime.Attachment
+// field-for-field — kept as a separate local DTO so internal/mime's types
+// don't leak into the public core surface.
+type Attachment struct {
+	Index       int
+	Filename    string
+	ContentType string
+	Size        int64
 }
 
 // SearchResult is a header-search hit, carrying the folder it lives in so
@@ -190,7 +201,37 @@ func (s *Service) Body(ctx context.Context, cfg config.Account, folderPath strin
 	if err != nil {
 		return Body{}, fmt.Errorf("render message: %w", err)
 	}
-	return Body{Raw: raw, PlainText: plainText}, nil
+
+	parts, err := mime.Attachments(raw)
+	if err != nil {
+		return Body{}, fmt.Errorf("list attachments: %w", err)
+	}
+	attachments := make([]Attachment, len(parts))
+	for i, p := range parts {
+		attachments[i] = Attachment{Index: p.Index, Filename: p.Filename, ContentType: p.ContentType, Size: p.Size}
+	}
+
+	return Body{Raw: raw, PlainText: plainText, Attachments: attachments}, nil
+}
+
+// SaveAttachment writes the decoded bytes of one attachment (identified by
+// the Index from Body.Attachments) to destPath. The message's raw body is
+// re-fetched via the same cache-or-fetch path as Body, so calling this
+// after viewing a message's attachment list is a cache hit in the common
+// case.
+func (s *Service) SaveAttachment(ctx context.Context, cfg config.Account, folderPath string, uid uint32, index int, destPath string) error {
+	_, folderID, err := s.resolveIDs(ctx, cfg.Slug, folderPath)
+	if err != nil {
+		return err
+	}
+	raw, err := s.cachedOrFetchRaw(ctx, cfg, folderPath, folderID, uid)
+	if err != nil {
+		return err
+	}
+	if err := mime.SaveAttachment(raw, index, destPath); err != nil {
+		return fmt.Errorf("save attachment: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) cachedOrFetchRaw(ctx context.Context, cfg config.Account, folderPath string, folderID int64, uid uint32) ([]byte, error) {

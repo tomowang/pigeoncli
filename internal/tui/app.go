@@ -102,6 +102,12 @@ type App struct {
 	searchInput       textinput.Model
 	showSearchResults bool
 	searchResultsList list.Model
+
+	pickingAttachment   bool
+	attachmentPicker    list.Model
+	savingAttachment    bool
+	saveAttachmentInput textinput.Model
+	pendingAttachment   message.Attachment
 }
 
 func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
@@ -121,6 +127,10 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 	searchResultsList.Title = "Search results"
 	searchResultsList.SetShowHelp(false)
 
+	attachmentPicker := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	attachmentPicker.Title = "Attachments"
+	attachmentPicker.SetShowHelp(false)
+
 	defaultTheme, _ := themeByName("")
 
 	return App{
@@ -135,6 +145,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		folders:           folders,
 		messages:          messages,
 		searchResultsList: searchResultsList,
+		attachmentPicker:  attachmentPicker,
 		viewport:          viewport.New(0, 0),
 		syncInterval:      defaultSyncInterval,
 	}
@@ -288,6 +299,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewingRaw = false
 		m.viewport.SetContent(msg.body.PlainText)
 		m.viewport.GotoTop()
+		m.layout() // viewport height depends on whether this message has an attachments line
 		m = m.clearStatus()
 		return m, nil
 
@@ -364,6 +376,16 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.clearStatus()
 		return m, nil
 
+	case attachmentSavedMsg:
+		if msg.err != nil {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("save attachment: %v", msg.err), sevError)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m, cmd = m.setStatus(fmt.Sprintf("Saved to %s", msg.path), sevSuccess)
+		return m, cmd
+
 	case relatedLoadedMsg:
 		if msg.err != nil {
 			var cmd tea.Cmd
@@ -422,6 +444,14 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.showSearchResults {
 		return m.updateSearchResults(msg)
+	}
+
+	if m.pickingAttachment {
+		return m.updateAttachmentPicker(msg)
+	}
+
+	if m.savingAttachment {
+		return m.updateSavingAttachment(msg)
 	}
 
 	if m.composing {
@@ -546,6 +576,17 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m, cmd = m.setStatus("Loading related messages...", sevInfo)
 		return m, tea.Batch(cmd, m.relatedCmd(*m.viewingMsg))
+	case "a":
+		switch len(m.viewBody.Attachments) {
+		case 0:
+			var cmd tea.Cmd
+			m, cmd = m.setStatus("No attachments.", sevInfo)
+			return m, cmd
+		case 1:
+			return m.beginSaveAttachment(m.viewBody.Attachments[0]), nil
+		default:
+			return m.beginAttachmentPicker(), nil
+		}
 	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -567,11 +608,18 @@ func (m *App) layout() {
 	m.folders.SetSize(max(foldersWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
 	m.messages.SetSize(max(messagesWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
 
+	viewportHeight := max(m.height-2, 1) // reserve the header and status bar rows
+	if m.viewingMsg != nil && len(m.viewBody.Attachments) > 0 {
+		viewportHeight = max(viewportHeight-1, 1) // reserve the attachments line
+	}
 	m.viewport.Width = m.width
-	m.viewport.Height = max(m.height-2, 1) // reserve the header and status bar rows
+	m.viewport.Height = viewportHeight
 
 	m.searchInput.Width = max(m.width-4, 10)
 	m.searchResultsList.SetSize(m.width, max(m.height-2, 1)) // reserve the header and status bar rows
+
+	m.saveAttachmentInput.Width = max(m.width-4, 10)
+	m.attachmentPicker.SetSize(m.width, max(m.height-2, 1)) // reserve the header and status bar rows
 
 	if m.composing {
 		m.composeTo.Width = max(m.width-4, 10)
@@ -599,13 +647,25 @@ func (m App) View() string {
 		return m.viewSearchResults()
 	}
 
+	if m.pickingAttachment {
+		return m.viewAttachmentPicker()
+	}
+
+	if m.savingAttachment {
+		return m.viewSaveAttachment()
+	}
+
 	if m.composing {
 		return m.viewCompose()
 	}
 
 	if m.viewingMsg != nil {
 		header := m.theme.ViewHeader.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
-		return header + "\n" + m.viewport.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+		body := header + "\n" + m.viewport.View()
+		if line := m.attachmentsLine(); line != "" {
+			body += "\n" + line
+		}
+		return body + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
 	}
 
 	accountsStyle, foldersStyle, messagesStyle := m.theme.InactivePane, m.theme.InactivePane, m.theme.InactivePane
@@ -676,6 +736,7 @@ var helpSections = []helpSection{
 			{"R", "reply-all"},
 			{"t", "toggle raw / rendered"},
 			{"g", "go to related messages (In-Reply-To / References)"},
+			{"a", "save an attachment"},
 			{"esc", "back to message list"},
 		},
 	},

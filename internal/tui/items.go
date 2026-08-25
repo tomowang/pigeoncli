@@ -73,6 +73,20 @@ func (s searchResultItem) Description() string {
 	return fmt.Sprintf("%s — %s", from, s.Date.Format("2006-01-02 15:04"))
 }
 
+// attachmentItem adapts message.Attachment to bubbles/list's
+// Item/DefaultItem.
+type attachmentItem message.Attachment
+
+func (a attachmentItem) FilterValue() string { return a.Filename }
+
+func (a attachmentItem) Title() string {
+	return fmt.Sprintf("[%d] %s", a.Index+1, a.Filename)
+}
+
+func (a attachmentItem) Description() string {
+	return fmt.Sprintf("%s — %s", a.ContentType, humanSize(a.Size))
+}
+
 func hasFlag(flags []string, want string) bool {
 	for _, f := range flags {
 		if f == want {
