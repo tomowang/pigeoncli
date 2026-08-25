@@ -172,5 +172,5 @@ func (m App) viewAddAccount() string {
 		fields[i] = f.View()
 	}
 	body := header + "\n\n" + lipgloss.JoinVertical(lipgloss.Left, fields...)
-	return body + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+	return body + "\n" + m.footer()
 }

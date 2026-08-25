@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -77,6 +78,8 @@ type App struct {
 
 	syncCh       chan folder.Progress
 	syncInterval time.Duration
+	syncSpinner  spinner.Model
+	lastSyncAt   time.Time
 
 	accounts list.Model
 	folders  list.Model
@@ -138,6 +141,9 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 
 	defaultTheme, _ := themeByName("")
 
+	syncSpinner := spinner.New()
+	syncSpinner.Spinner = spinner.Dot
+
 	return App{
 		ctx:               ctx,
 		accountSvc:        accountSvc,
@@ -153,6 +159,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		attachmentPicker:  attachmentPicker,
 		viewport:          viewport.New(0, 0),
 		syncInterval:      defaultSyncInterval,
+		syncSpinner:       syncSpinner,
 	}
 }
 
@@ -357,9 +364,19 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncCh = ch
 			var statusCmd tea.Cmd
 			m, statusCmd = m.setStatus("Background sync starting…", sevInfo)
-			cmds = append(cmds, statusCmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch))
+			cmds = append(cmds, statusCmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch), m.syncSpinner.Tick)
 		}
 		return m, tea.Batch(cmds...)
+
+	case spinner.TickMsg:
+		if m.syncCh == nil {
+			// Sync already finished; drop the tick instead of rescheduling
+			// so the spinner doesn't keep ticking in the background forever.
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.syncSpinner, cmd = m.syncSpinner.Update(msg)
+		return m, cmd
 
 	case syncProgressMsg:
 		p := msg.progress
@@ -429,6 +446,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m, cmd = m.setStatus(fmt.Sprintf("sync failed: %v", msg.err), sevError)
 		} else {
+			m.lastSyncAt = time.Now()
 			m, cmd = m.setStatus("Sync complete.", sevSuccess)
 		}
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
@@ -533,7 +551,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncCh = ch
 			var cmd tea.Cmd
 			m, cmd = m.setStatus("Syncing...", sevInfo)
-			return m, tea.Batch(cmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch))
+			return m, tea.Batch(cmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch), m.syncSpinner.Tick)
 		}
 	}
 
@@ -628,7 +646,7 @@ func (m *App) layout() {
 	const borderWidth, borderHeight = 2, 2
 	const cardPaddingWidth = 2 // theme.Card's horizontal Padding(0, 1)
 
-	paneHeight := m.height - 1 // reserve the status bar row
+	paneHeight := m.height - 2 // reserve the status bar and shortcuts rows
 
 	if m.viewingMsg != nil {
 		// Reading a message: accounts/folders make way for a card-style
@@ -655,17 +673,17 @@ func (m *App) layout() {
 	}
 
 	m.searchInput.Width = max(m.width-4, 10)
-	m.searchResultsList.SetSize(m.width, max(m.height-2, 1)) // reserve the header and status bar rows
+	m.searchResultsList.SetSize(m.width, max(m.height-3, 1)) // reserve the header, status bar, and shortcuts rows
 
 	m.saveAttachmentInput.Width = max(m.width-4, 10)
-	m.attachmentPicker.SetSize(m.width, max(m.height-2, 1)) // reserve the header and status bar rows
+	m.attachmentPicker.SetSize(m.width, max(m.height-3, 1)) // reserve the header, status bar, and shortcuts rows
 
 	if m.composing {
 		m.composeTo.Width = max(m.width-4, 10)
 		m.composeCc.Width = max(m.width-4, 10)
 		m.composeSubject.Width = max(m.width-4, 10)
 		m.composeBody.SetWidth(max(m.width-2, 10))
-		m.composeBody.SetHeight(max(m.height-5, 3)) // reserve To/Cc/Subject + status bar
+		m.composeBody.SetHeight(max(m.height-6, 3)) // reserve To/Cc/Subject + status bar + shortcuts row
 	}
 
 	if m.addingAccount {
@@ -713,7 +731,7 @@ func (m App) View() string {
 			m.theme.InactivePane.Render(m.messages.View()),
 			m.theme.Card.Render(m.viewCard()),
 		)
-		return row + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+		return row + "\n" + m.footer()
 	}
 
 	accountsStyle, foldersStyle, messagesStyle := m.theme.InactivePane, m.theme.InactivePane, m.theme.InactivePane
@@ -731,7 +749,7 @@ func (m App) View() string {
 		foldersStyle.Render(m.folders.View()),
 		messagesStyle.Render(m.messages.View()),
 	)
-	return row + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+	return row + "\n" + m.footer()
 }
 
 // viewCard renders the currently viewed message as card content: a subject
@@ -762,10 +780,9 @@ func (m App) viewCard() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m App) statusLine() string {
-	if m.status.text != "" {
-		return m.status.text
-	}
+// shortcutsLine returns the contextual keybinding hint for the current mode.
+// Unlike the status bar above it, this row is always shown.
+func (m App) shortcutsLine() string {
 	if m.composing {
 		return "pigeon — compose — tab: next field · ctrl+s: send · esc: cancel"
 	}
@@ -780,6 +797,40 @@ func (m App) statusLine() string {
 		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · esc: back · q: quit", mode)
 	}
 	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · ?: help · L: log · q: quit"
+}
+
+// statusBarText returns what the status bar (the row above shortcuts) should
+// show right now: the current status message (prefixed with a spinner while
+// a sync is running), or — once idle with nothing to report — when the last
+// sync finished. Blank only if neither has ever happened yet.
+func (m App) statusBarText() (text string, sev severity) {
+	if m.syncCh != nil {
+		msg := m.status.text
+		if msg == "" {
+			msg = "Syncing…"
+		}
+		return m.syncSpinner.View() + " " + msg, sevInfo
+	}
+	if m.status.text != "" {
+		return m.status.text, m.status.sev
+	}
+	if !m.lastSyncAt.IsZero() {
+		return "Last synced " + m.lastSyncAt.Format("15:04:05"), sevInfo
+	}
+	return "", sevInfo
+}
+
+// footer renders the two-row status area shown at the bottom of every view:
+// the status bar (sync progress, errors, confirmations, last-sync time — a
+// blank styled row when there's nothing to report yet) above the shortcuts
+// row, which always shows the current mode's keybindings.
+func (m App) footer() string {
+	shortcuts := m.theme.Shortcuts.Render(m.shortcutsLine())
+	text, sev := m.statusBarText()
+	if text == "" {
+		return "\n" + shortcuts
+	}
+	return m.theme.StatusStyle(sev).Render(text) + "\n" + shortcuts
 }
 
 // helpSection is one titled group of keybinding rows in the help overlay.

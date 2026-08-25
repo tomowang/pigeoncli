@@ -58,8 +58,8 @@ func (m App) setStatus(text string, sev severity) (App, tea.Cmd) {
 	})
 }
 
-// clearStatus resets the status line to its zero value (statusLine() then
-// falls back to the contextual keybinding hint) without touching history —
+// clearStatus resets the status bar to its zero value (footer() then renders
+// it as a blank row above the shortcuts line) without touching history —
 // this isn't a message worth logging, just "nothing pending anymore".
 func (m App) clearStatus() App {
 	m.status = statusEntry{}

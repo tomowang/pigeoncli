@@ -147,9 +147,9 @@ func (m App) updateSavingAttachment(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m App) viewAttachmentPicker() string {
 	header := m.theme.ViewHeader.Render("Attachments — enter: save · esc: back")
-	return header + "\n" + m.attachmentPicker.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+	return header + "\n" + m.attachmentPicker.View() + "\n" + m.footer()
 }
 
 func (m App) viewSaveAttachment() string {
-	return m.saveAttachmentInput.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+	return m.saveAttachmentInput.View() + "\n" + m.footer()
 }

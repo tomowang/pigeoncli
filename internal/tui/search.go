@@ -84,10 +84,10 @@ func (m App) updateSearchResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m App) viewSearch() string {
-	return m.searchInput.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+	return m.searchInput.View() + "\n" + m.footer()
 }
 
 func (m App) viewSearchResults() string {
 	header := m.theme.ViewHeader.Render(fmt.Sprintf("%s — enter: open · esc: back", m.searchResultsList.Title))
-	return header + "\n" + m.searchResultsList.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+	return header + "\n" + m.searchResultsList.View() + "\n" + m.footer()
 }
