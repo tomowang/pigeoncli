@@ -558,32 +558,60 @@ func (m App) statusLine() string {
 	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · ?: help · L: log · q: quit"
 }
 
+// helpSection is one titled group of keybinding rows in the help overlay.
+// Keeping this as data (rather than a hand-formatted string block) means
+// later features add their new key as one Rows entry instead of re-aligning
+// a flat string slice.
+type helpSection struct {
+	Title string
+	Rows  [][2]string // {key, description}
+}
+
+// helpSections is the full set of keybindings shown by viewHelp, grouped by
+// the mode they apply in.
+var helpSections = []helpSection{
+	{
+		Title: "Navigation",
+		Rows: [][2]string{
+			{"tab", "switch pane (accounts / folders / messages)"},
+			{"↑/↓, j/k", "move selection, scroll"},
+			{"enter", "open selection"},
+			{"c", "compose a new message"},
+			{"s", "sync the selected account (also runs automatically in the background)"},
+			{"?", "toggle this help"},
+			{"L", "toggle the status log"},
+			{"q, ctrl+c", "quit"},
+		},
+	},
+	{
+		Title: "Message viewer",
+		Rows: [][2]string{
+			{"r", "reply"},
+			{"R", "reply-all"},
+			{"t", "toggle raw / rendered"},
+			{"esc", "back to message list"},
+		},
+	},
+	{
+		Title: "Compose",
+		Rows: [][2]string{
+			{"tab", "next field (To / Cc / Subject / Body)"},
+			{"ctrl+s", "send"},
+			{"esc", "cancel"},
+		},
+	},
+}
+
 func (m App) viewHelp() string {
-	lines := []string{
-		"pigeon — keybindings",
-		"",
-		"Navigation",
-		"  tab            switch pane (accounts / folders / messages)",
-		"  ↑/↓, j/k       move selection, scroll",
-		"  enter          open selection",
-		"  c              compose a new message",
-		"  s              sync the selected account",
-		"  ?              toggle this help",
-		"  q, ctrl+c      quit",
-		"",
-		"Message viewer",
-		"  r              reply",
-		"  R              reply-all",
-		"  t              toggle raw / rendered",
-		"  esc            back to message list",
-		"",
-		"Compose",
-		"  tab            next field (To / Cc / Subject / Body)",
-		"  ctrl+s         send",
-		"  esc            cancel",
-		"",
-		"Press any key to close.",
+	lines := []string{"pigeon — keybindings", ""}
+	for _, section := range helpSections {
+		lines = append(lines, section.Title)
+		for _, row := range section.Rows {
+			lines = append(lines, fmt.Sprintf("  %-14s %s", row[0], row[1]))
+		}
+		lines = append(lines, "")
 	}
+	lines = append(lines, "Press any key to close.")
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
 }
 
