@@ -26,12 +26,6 @@ import (
 )
 
 var (
-	statusBarStyle = lipgloss.NewStyle().
-			Bold(true).
-			Padding(0, 1).
-			Foreground(lipgloss.Color("15")).
-			Background(lipgloss.Color("62"))
-
 	activePaneStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
 	inactivePaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
 
@@ -76,8 +70,11 @@ type App struct {
 
 	width, height int
 	focus         focusPane
-	status        string
+	status        statusEntry
+	statusHistory []statusEntry
+	statusGen     int
 	showHelp      bool
+	showLog       bool
 
 	accounts list.Model
 	folders  list.Model
@@ -207,10 +204,17 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 
+	case statusClearMsg:
+		if msg.gen == m.statusGen {
+			m = m.clearStatus()
+		}
+		return m, nil
+
 	case accountsLoadedMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("load accounts: %v", msg.err)
-			return m, nil
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("load accounts: %v", msg.err), sevError)
+			return m, cmd
 		}
 		items := make([]list.Item, len(msg.accounts))
 		for i, a := range msg.accounts {
@@ -218,17 +222,19 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.accounts.SetItems(items)
 		if len(msg.accounts) == 0 {
-			m.status = "No accounts configured. Add one with `pigeon account add`, then `pigeon sync`."
-			return m, nil
+			var cmd tea.Cmd
+			m, cmd = m.setStatus("No accounts configured. Add one with `pigeon account add`, then `pigeon sync`.", sevInfo)
+			return m, cmd
 		}
 		m.selectedAccount = msg.accounts[0]
 		return m, m.loadFoldersCmd(msg.accounts[0].Slug)
 
 	case foldersLoadedMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("load folders for %s: %v", msg.slug, msg.err)
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("load folders for %s: %v", msg.slug, msg.err), sevError)
 			m.folders.SetItems(nil)
-			return m, nil
+			return m, cmd
 		}
 		items := make([]list.Item, len(msg.folders))
 		for i, f := range msg.folders {
@@ -254,9 +260,10 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messagesLoadedMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("load messages for %s: %v", msg.folderPath, msg.err)
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("load messages for %s: %v", msg.folderPath, msg.err), sevError)
 			m.messages.SetItems(nil)
-			return m, nil
+			return m, cmd
 		}
 		items := make([]list.Item, len(msg.messages))
 		for i, mm := range msg.messages {
@@ -267,35 +274,40 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messageBodyLoadedMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("open message: %v", msg.err)
-			return m, nil
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("open message: %v", msg.err), sevError)
+			return m, cmd
 		}
 		m.viewingMsg = &msg.msg
 		m.viewBody = msg.body
 		m.viewingRaw = false
 		m.viewport.SetContent(msg.body.PlainText)
 		m.viewport.GotoTop()
-		m.status = ""
+		m = m.clearStatus()
 		return m, nil
 
 	case sendResultMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("send failed: %v", msg.err)
-			return m, nil
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("send failed: %v", msg.err), sevError)
+			return m, cmd
 		}
 		m.composing = false
-		m.status = "Message sent."
+		var cmd tea.Cmd
+		m, cmd = m.setStatus("Message sent.", sevSuccess)
 		// Service.Send already refreshed the sqlite cache (e.g. a Sent
 		// copy); reload folders so this pane's counts reflect that too.
-		return m, m.loadFoldersCmd(m.selectedAccount.Slug)
+		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 
 	case syncResultMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("sync failed: %v", msg.err)
-			return m, nil
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("sync failed: %v", msg.err), sevError)
+			return m, cmd
 		}
-		m.status = "Sync complete."
-		return m, m.loadFoldersCmd(m.selectedAccount.Slug)
+		var cmd tea.Cmd
+		m, cmd = m.setStatus("Sync complete.", sevSuccess)
+		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 	}
 
 	if m.showHelp {
@@ -304,6 +316,16 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			m.showHelp = false
+		}
+		return m, nil
+	}
+
+	if m.showLog {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			if key.String() == "q" || key.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			m.showLog = false
 		}
 		return m, nil
 	}
@@ -328,6 +350,9 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.showHelp = true
 			return m, nil
+		case "L":
+			m.showLog = true
+			return m, nil
 		case "tab":
 			m.focus = (m.focus + 1) % 3
 			return m, nil
@@ -335,17 +360,20 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.openSelection()
 		case "c":
 			if m.selectedAccount.Slug == "" {
-				m.status = "No account selected."
-				return m, nil
+				var cmd tea.Cmd
+				m, cmd = m.setStatus("No account selected.", sevInfo)
+				return m, cmd
 			}
 			return m.startNewMessage()
 		case "s":
 			if m.selectedAccount.Slug == "" {
-				m.status = "No account selected."
-				return m, nil
+				var cmd tea.Cmd
+				m, cmd = m.setStatus("No account selected.", sevInfo)
+				return m, cmd
 			}
-			m.status = "Syncing..."
-			return m, m.syncSelectedAccountCmd()
+			var cmd tea.Cmd
+			m, cmd = m.setStatus("Syncing...", sevInfo)
+			return m, tea.Batch(cmd, m.syncSelectedAccountCmd())
 		}
 	}
 
@@ -375,8 +403,9 @@ func (m App) openSelection() (tea.Model, tea.Cmd) {
 		}
 	case focusMessages:
 		if item, ok := m.messages.SelectedItem().(messageItem); ok {
-			m.status = "Loading message..."
-			return m, m.openMessageCmd(message.Message(item))
+			var cmd tea.Cmd
+			m, cmd = m.setStatus("Loading message...", sevInfo)
+			return m, tea.Batch(cmd, m.openMessageCmd(message.Message(item)))
 		}
 	}
 	return m, nil
@@ -440,13 +469,17 @@ func (m App) View() string {
 		return m.viewHelp()
 	}
 
+	if m.showLog {
+		return m.viewLog()
+	}
+
 	if m.composing {
 		return m.viewCompose()
 	}
 
 	if m.viewingMsg != nil {
 		header := viewHeaderStyle.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
-		return header + "\n" + m.viewport.View() + "\n" + statusBarStyle.Render(m.statusLine())
+		return header + "\n" + m.viewport.View() + "\n" + statusStyleFor(m.status.sev).Render(m.statusLine())
 	}
 
 	accountsStyle, foldersStyle, messagesStyle := inactivePaneStyle, inactivePaneStyle, inactivePaneStyle
@@ -464,12 +497,12 @@ func (m App) View() string {
 		foldersStyle.Render(m.folders.View()),
 		messagesStyle.Render(m.messages.View()),
 	)
-	return row + "\n" + statusBarStyle.Render(m.statusLine())
+	return row + "\n" + statusStyleFor(m.status.sev).Render(m.statusLine())
 }
 
 func (m App) statusLine() string {
-	if m.status != "" {
-		return m.status
+	if m.status.text != "" {
+		return m.status.text
 	}
 	if m.composing {
 		return "pigeon — compose — tab: next field · ctrl+s: send · esc: cancel"
@@ -481,7 +514,7 @@ func (m App) statusLine() string {
 		}
 		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · esc: back · q: quit", mode)
 	}
-	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · ?: help · q: quit"
+	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · ?: help · L: log · q: quit"
 }
 
 func (m App) viewHelp() string {

@@ -1,0 +1,115 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// severity classifies a status message for color-coding in the status bar
+// and the L log overlay.
+type severity int
+
+const (
+	sevInfo severity = iota
+	sevSuccess
+	sevError
+)
+
+// statusEntry is one status-bar message, kept in App.statusHistory so it's
+// still visible (via the log overlay) after being overwritten by the next
+// event.
+type statusEntry struct {
+	text string
+	sev  severity
+	at   time.Time
+}
+
+// statusHistoryCap bounds App.statusHistory so a long session doesn't grow
+// it unboundedly.
+const statusHistoryCap = 100
+
+// statusClearMsg auto-clears an info/success status after a delay. gen is
+// compared against App.statusGen so a stale tick (scheduled by an earlier
+// setStatus call) can't wipe out a status set after it.
+type statusClearMsg struct{ gen int }
+
+var (
+	statusInfoStyle = lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1).
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("62"))
+
+	statusSuccessStyle = lipgloss.NewStyle().
+				Bold(true).
+				Padding(0, 1).
+				Foreground(lipgloss.Color("15")).
+				Background(lipgloss.Color("28"))
+
+	statusErrorStyle = lipgloss.NewStyle().
+				Bold(true).
+				Padding(0, 1).
+				Foreground(lipgloss.Color("15")).
+				Background(lipgloss.Color("124"))
+)
+
+func statusStyleFor(sev severity) lipgloss.Style {
+	switch sev {
+	case sevSuccess:
+		return statusSuccessStyle
+	case sevError:
+		return statusErrorStyle
+	default:
+		return statusInfoStyle
+	}
+}
+
+// setStatus records text as the current status and appends it to history.
+// info/success messages auto-clear after a few seconds (via statusClearMsg);
+// error messages persist until the next setStatus call so they aren't
+// missed.
+func (m App) setStatus(text string, sev severity) (App, tea.Cmd) {
+	m.statusGen++
+	m.status = statusEntry{text: text, sev: sev, at: time.Now()}
+	m.statusHistory = append(m.statusHistory, m.status)
+	if over := len(m.statusHistory) - statusHistoryCap; over > 0 {
+		m.statusHistory = m.statusHistory[over:]
+	}
+
+	if sev == sevError {
+		return m, nil
+	}
+	gen := m.statusGen
+	return m, tea.Tick(4*time.Second, func(time.Time) tea.Msg {
+		return statusClearMsg{gen: gen}
+	})
+}
+
+// clearStatus resets the status line to its zero value (statusLine() then
+// falls back to the contextual keybinding hint) without touching history —
+// this isn't a message worth logging, just "nothing pending anymore".
+func (m App) clearStatus() App {
+	m.status = statusEntry{}
+	return m
+}
+
+// viewLog renders the full-screen scrollable status history overlay,
+// following the same "press any key to close" pattern as viewHelp.
+func (m App) viewLog() string {
+	if len(m.statusHistory) == 0 {
+		return lipgloss.NewStyle().Padding(1, 2).Render("pigeon — log\n\nNo messages yet.\n\nPress any key to close.")
+	}
+
+	lines := make([]string, 0, len(m.statusHistory)+3)
+	lines = append(lines, "pigeon — log", "")
+	for i := len(m.statusHistory) - 1; i >= 0; i-- {
+		e := m.statusHistory[i]
+		lines = append(lines, statusStyleFor(e.sev).Render(fmt.Sprintf(" %s ", e.at.Format("15:04:05")))+" "+e.text)
+	}
+	lines = append(lines, "", "Press any key to close.")
+	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
+}

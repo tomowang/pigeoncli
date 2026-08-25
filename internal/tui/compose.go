@@ -55,7 +55,7 @@ func (m App) enterCompose(draft compose.Draft, field composeField) App {
 	m.composeReferences = draft.References
 
 	m.composing = true
-	m.status = ""
+	m = m.clearStatus()
 	m.composeField = field
 	switch field {
 	case composeFieldTo:
@@ -81,7 +81,7 @@ func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch key.String() {
 		case "esc":
 			m.composing = false
-			m.status = ""
+			m = m.clearStatus()
 			return m, nil
 		case "tab":
 			return m.cycleComposeField(), nil
@@ -137,10 +137,11 @@ func (m App) sendCompose() (tea.Model, tea.Cmd) {
 	ctx := m.ctx
 	svc := m.composeSvc
 
-	m.status = "Sending..."
-	return m, func() tea.Msg {
+	var cmd tea.Cmd
+	m, cmd = m.setStatus("Sending...", sevInfo)
+	return m, tea.Batch(cmd, func() tea.Msg {
 		return sendResultMsg{err: svc.Send(ctx, cfg, draft)}
-	}
+	})
 }
 
 func splitAddrs(s string) []string {
@@ -161,5 +162,5 @@ func (m App) viewCompose() string {
 		m.composeSubject.View(),
 		m.composeBody.View(),
 	)
-	return fields + "\n" + statusBarStyle.Render(m.statusLine())
+	return fields + "\n" + statusStyleFor(m.status.sev).Render(m.statusLine())
 }
