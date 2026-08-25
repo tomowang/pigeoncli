@@ -115,9 +115,11 @@ type App struct {
 	saveAttachmentInput textinput.Model
 	pendingAttachment   message.Attachment
 
-	addingAccount    bool
-	accountForm      [accountFieldCount]textinput.Model
-	accountFormField accountFormField
+	addingAccount     bool
+	accountForm       [accountFieldCount]textinput.Model
+	accountFormField  accountFormField
+	accountIMAPTLSIdx int
+	accountSMTPTLSIdx int
 }
 
 func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
@@ -745,8 +747,12 @@ func (m *App) layout() {
 	}
 
 	if m.addingAccount {
+		inputWidth, _ := m.accountFieldLayout()
 		for i := range m.accountForm {
-			m.accountForm[i].Width = max(m.width-4, 10)
+			if isSelectField(accountFormField(i)) {
+				continue
+			}
+			m.accountForm[i].Width = inputWidth
 		}
 	}
 }
@@ -849,7 +855,7 @@ func (m App) shortcutsLine() string {
 		return "pigeon — compose — tab: next field · ctrl+s: send · esc: cancel"
 	}
 	if m.addingAccount {
-		return "pigeon — add account — tab/shift+tab: next/prev field · ctrl+s: save · esc: cancel"
+		return "pigeon — add account — tab/shift+tab: field · ←/→: change security · ctrl+s: save · esc: cancel"
 	}
 	if m.viewingMsg != nil {
 		mode := "rendered"
@@ -946,6 +952,7 @@ var helpSections = []helpSection{
 		Title: "Add account",
 		Rows: [][2]string{
 			{"tab / shift+tab", "next / previous field"},
+			{"←/→ or enter", "change IMAP/SMTP security (on that field)"},
 			{"ctrl+s", "save"},
 			{"esc", "cancel"},
 		},
