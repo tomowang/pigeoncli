@@ -95,7 +95,7 @@ func (db *DB) UpsertMessageHeaders(ctx context.Context, accountID, folderID int6
 			seen = 1
 		}
 		if _, err := stmt.ExecContext(ctx, accountID, folderID, h.UID, h.MessageID, h.InReplyTo, string(referencesJSON), h.Subject,
-			h.FromName, h.FromAddr, string(toJSON), string(ccJSON), h.Date, string(flagsJSON), seen, h.Size,
+			h.FromName, h.FromAddr, string(toJSON), string(ccJSON), formatDate(h.Date), string(flagsJSON), seen, h.Size,
 		); err != nil {
 			return fmt.Errorf("upsert header uid=%d: %w", h.UID, err)
 		}
@@ -158,6 +158,35 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 	return tx.Commit()
 }
 
+// formatDate renders t for storage in the messages.date column. SQLite has
+// no native datetime type, and the sqlite driver's default string
+// conversion (time.Time.String) isn't reliably parseable back (e.g. a
+// zone abbreviation of "" prints as the numeric offset a second time), so
+// dates are written and read explicitly as RFC3339Nano instead.
+func formatDate(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// parseDate parses a messages.date value written by formatDate. Rows
+// written before this fix may still hold the old time.Time.String()
+// format; parseDate falls back to their "YYYY-MM-DD HH:MM:SS" prefix,
+// ignoring the unreliable zone suffix, rather than failing to load the
+// message. A future sync overwrites these with the canonical format.
+func parseDate(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if len(s) >= 19 {
+		if t, err := time.Parse("2006-01-02 15:04:05", s[:19]); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // MessageRow is a cached message's header fields, as read back for display.
 type MessageRow struct {
 	UID        uint32
@@ -190,12 +219,12 @@ func (db *DB) ListMessages(ctx context.Context, folderID int64, limit int) ([]Me
 	for rows.Next() {
 		var m MessageRow
 		var toJSON, ccJSON, flagsJSON, referencesJSON string
-		var date sql.NullTime
+		var date sql.NullString
 		if err := rows.Scan(&m.UID, &m.MessageID, &m.InReplyTo, &referencesJSON, &m.Subject, &m.FromName, &m.FromAddr,
 			&toJSON, &ccJSON, &date, &flagsJSON, &m.Size); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
-		m.Date = date.Time
+		m.Date = parseDate(date.String)
 		if err := json.Unmarshal([]byte(toJSON), &m.ToAddrs); err != nil {
 			return nil, fmt.Errorf("decode to_addrs for uid=%d: %w", m.UID, err)
 		}
@@ -247,12 +276,12 @@ func (db *DB) FindMessagesByMessageIDs(ctx context.Context, accountID int64, mes
 	for rows.Next() {
 		var r SearchResultRow
 		var toJSON, ccJSON, flagsJSON string
-		var date sql.NullTime
+		var date sql.NullString
 		if err := rows.Scan(&r.UID, &r.MessageID, &r.InReplyTo, &r.Subject, &r.FromName, &r.FromAddr,
 			&toJSON, &ccJSON, &date, &flagsJSON, &r.Size, &r.FolderPath); err != nil {
 			return nil, fmt.Errorf("scan related message: %w", err)
 		}
-		r.Date = date.Time
+		r.Date = parseDate(date.String)
 		if err := json.Unmarshal([]byte(toJSON), &r.ToAddrs); err != nil {
 			return nil, fmt.Errorf("decode to_addrs for uid=%d: %w", r.UID, err)
 		}

@@ -44,12 +44,12 @@ func (db *DB) SearchMessages(ctx context.Context, accountID int64, query string,
 	for rows.Next() {
 		var r SearchResultRow
 		var toJSON, ccJSON, flagsJSON string
-		var date sql.NullTime
+		var date sql.NullString
 		if err := rows.Scan(&r.UID, &r.MessageID, &r.InReplyTo, &r.Subject, &r.FromName, &r.FromAddr,
 			&toJSON, &ccJSON, &date, &flagsJSON, &r.Size, &r.FolderPath); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
-		r.Date = date.Time
+		r.Date = parseDate(date.String)
 		if err := json.Unmarshal([]byte(toJSON), &r.ToAddrs); err != nil {
 			return nil, fmt.Errorf("decode to_addrs for uid=%d: %w", r.UID, err)
 		}
