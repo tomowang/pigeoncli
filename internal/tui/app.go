@@ -108,6 +108,10 @@ type App struct {
 	savingAttachment    bool
 	saveAttachmentInput textinput.Model
 	pendingAttachment   message.Attachment
+
+	addingAccount    bool
+	accountForm      [accountFieldCount]textinput.Model
+	accountFormField accountFormField
 }
 
 func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
@@ -316,6 +320,17 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// copy); reload folders so this pane's counts reflect that too.
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 
+	case accountAddedMsg:
+		if msg.err != nil {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("add account: %v", msg.err), sevError)
+			return m, cmd
+		}
+		m.addingAccount = false
+		var cmd tea.Cmd
+		m, cmd = m.setStatus(fmt.Sprintf("Account %q added.", msg.slug), sevSuccess)
+		return m, tea.Batch(cmd, m.loadAccountsCmd())
+
 	case settingsLoadedMsg:
 		if msg.err != nil {
 			var cmd tea.Cmd
@@ -458,6 +473,10 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateComposing(msg)
 	}
 
+	if m.addingAccount {
+		return m.updateAddingAccount(msg)
+	}
+
 	if m.viewingMsg != nil {
 		if key, ok := msg.(tea.KeyMsg); ok {
 			return m.updateViewing(key)
@@ -489,6 +508,8 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			return m.openSelection()
+		case "a":
+			return m.beginAddAccount(), nil
 		case "c":
 			if m.selectedAccount.Slug == "" {
 				var cmd tea.Cmd
@@ -628,6 +649,12 @@ func (m *App) layout() {
 		m.composeBody.SetWidth(max(m.width-2, 10))
 		m.composeBody.SetHeight(max(m.height-5, 3)) // reserve To/Cc/Subject + status bar
 	}
+
+	if m.addingAccount {
+		for i := range m.accountForm {
+			m.accountForm[i].Width = max(m.width-4, 10)
+		}
+	}
 }
 
 func (m App) View() string {
@@ -657,6 +684,10 @@ func (m App) View() string {
 
 	if m.composing {
 		return m.viewCompose()
+	}
+
+	if m.addingAccount {
+		return m.viewAddAccount()
 	}
 
 	if m.viewingMsg != nil {
@@ -693,6 +724,9 @@ func (m App) statusLine() string {
 	if m.composing {
 		return "pigeon — compose — tab: next field · ctrl+s: send · esc: cancel"
 	}
+	if m.addingAccount {
+		return "pigeon — add account — tab/shift+tab: next/prev field · ctrl+s: save · esc: cancel"
+	}
 	if m.viewingMsg != nil {
 		mode := "rendered"
 		if m.viewingRaw {
@@ -721,6 +755,7 @@ var helpSections = []helpSection{
 			{"tab", "switch pane (accounts / folders / messages)"},
 			{"↑/↓, j/k", "move selection, scroll"},
 			{"enter", "open selection"},
+			{"a", "add a new account"},
 			{"c", "compose a new message"},
 			{"s", "sync the selected account (also runs automatically in the background)"},
 			{"/", "search subject/from/to/cc for the selected account"},
@@ -745,6 +780,14 @@ var helpSections = []helpSection{
 		Rows: [][2]string{
 			{"tab", "next field (To / Cc / Subject / Body)"},
 			{"ctrl+s", "send"},
+			{"esc", "cancel"},
+		},
+	},
+	{
+		Title: "Add account",
+		Rows: [][2]string{
+			{"tab / shift+tab", "next / previous field"},
+			{"ctrl+s", "save"},
 			{"esc", "cancel"},
 		},
 	},

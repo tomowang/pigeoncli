@@ -39,28 +39,6 @@ func promptPassword(prompt string) (string, error) {
 	return string(pw), nil
 }
 
-func validateAccount(a account.Account) error {
-	if a.Slug == "" {
-		return fmt.Errorf("slug is required")
-	}
-	if a.Email == "" {
-		return fmt.Errorf("--email is required")
-	}
-	if a.IMAP.Host == "" {
-		return fmt.Errorf("--imap-host is required")
-	}
-	if a.SMTP.Host == "" {
-		return fmt.Errorf("--smtp-host is required")
-	}
-	if !a.IMAP.TLS.Valid() {
-		return fmt.Errorf("invalid --imap-tls %q (want tls, starttls, or none)", a.IMAP.TLS)
-	}
-	if !a.SMTP.TLS.Valid() {
-		return fmt.Errorf("invalid --smtp-tls %q (want tls, starttls, or none)", a.SMTP.TLS)
-	}
-	return nil
-}
-
 func newAccountCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "account",
@@ -127,7 +105,7 @@ func newAccountAddCmd() *cobra.Command {
 				IMAP:        account.ServerConfig{Host: f.imapHost, Port: f.imapPort, TLS: account.TLSMode(f.imapTLS)},
 				SMTP:        account.ServerConfig{Host: f.smtpHost, Port: f.smtpPort, TLS: account.TLSMode(f.smtpTLS)},
 			}
-			if err := validateAccount(a); err != nil {
+			if err := account.Validate(a); err != nil {
 				return err
 			}
 
@@ -201,7 +179,7 @@ func newAccountEditCmd() *cobra.Command {
 				a.SMTP.TLS = account.TLSMode(f.smtpTLS)
 			}
 
-			if err := validateAccount(a); err != nil {
+			if err := account.Validate(a); err != nil {
 				return err
 			}
 

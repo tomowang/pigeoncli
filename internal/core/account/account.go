@@ -60,6 +60,32 @@ func (s *Service) Get(ctx context.Context, slug string) (Account, error) {
 	return a, nil
 }
 
+// Validate checks that a has the fields required to save and connect to an
+// account: a slug, an email, IMAP/SMTP hosts, and valid TLS modes. It's
+// shared by internal/cli and internal/tui so both surfaces reject the same
+// incomplete input before it reaches Add/Update.
+func Validate(a Account) error {
+	if a.Slug == "" {
+		return fmt.Errorf("slug is required")
+	}
+	if a.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if a.IMAP.Host == "" {
+		return fmt.Errorf("IMAP host is required")
+	}
+	if a.SMTP.Host == "" {
+		return fmt.Errorf("SMTP host is required")
+	}
+	if !a.IMAP.TLS.Valid() {
+		return fmt.Errorf("invalid IMAP TLS mode %q (want tls, starttls, or none)", a.IMAP.TLS)
+	}
+	if !a.SMTP.TLS.Valid() {
+		return fmt.Errorf("invalid SMTP TLS mode %q (want tls, starttls, or none)", a.SMTP.TLS)
+	}
+	return nil
+}
+
 // Add creates a new account: its settings are written to the config file
 // and its password is stored in the OS keyring. It fails if the slug is
 // already in use.
