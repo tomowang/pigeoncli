@@ -98,6 +98,58 @@ func TestAccountFolderMessageLifecycle(t *testing.T) {
 	}
 }
 
+func TestFindMessagesByMessageIDs(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	accountID, err := db.UpsertAccount(ctx, "work", "me@example.com", "Work")
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+	inboxID, err := db.UpsertFolder(ctx, accountID, "INBOX", "INBOX", "/", `\Inbox`)
+	if err != nil {
+		t.Fatalf("UpsertFolder: %v", err)
+	}
+	sentID, err := db.UpsertFolder(ctx, accountID, "Sent", "Sent", "/", `\Sent`)
+	if err != nil {
+		t.Fatalf("UpsertFolder (sent): %v", err)
+	}
+
+	if err := db.UpsertMessageHeaders(ctx, accountID, sentID, []MessageHeader{
+		{UID: 1, MessageID: "<original@example.com>", Subject: "Original", Date: time.Now()},
+	}); err != nil {
+		t.Fatalf("UpsertMessageHeaders (sent): %v", err)
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, inboxID, []MessageHeader{
+		{
+			UID: 1, MessageID: "<reply@example.com>", InReplyTo: "<original@example.com>",
+			References: []string{"<original@example.com>"}, Subject: "Re: Original", Date: time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertMessageHeaders (inbox): %v", err)
+	}
+
+	rows, err := db.ListMessages(ctx, inboxID, 10)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0].References) != 1 || rows[0].References[0] != "<original@example.com>" {
+		t.Fatalf("expected references to round-trip, got %+v", rows)
+	}
+
+	related, err := db.FindMessagesByMessageIDs(ctx, accountID, []string{rows[0].InReplyTo})
+	if err != nil {
+		t.Fatalf("FindMessagesByMessageIDs: %v", err)
+	}
+	if len(related) != 1 || related[0].Subject != "Original" || related[0].FolderPath != "Sent" {
+		t.Fatalf("unexpected related messages: %+v", related)
+	}
+
+	if empty, err := db.FindMessagesByMessageIDs(ctx, accountID, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("expected no results for empty id list, got %+v err=%v", empty, err)
+	}
+}
+
 func TestFolderIDAndMessageBodyState(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

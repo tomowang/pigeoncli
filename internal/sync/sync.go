@@ -111,7 +111,7 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 	uids := make([]uint32, len(headers))
 	for i, h := range headers {
 		rows[i] = sqlite.MessageHeader{
-			UID: h.UID, MessageID: h.MessageID, InReplyTo: h.InReplyTo, Subject: h.Subject,
+			UID: h.UID, MessageID: h.MessageID, InReplyTo: h.InReplyTo, References: h.References, Subject: h.Subject,
 			FromName: h.FromName, FromAddr: h.FromAddr, ToAddrs: h.ToAddrs, CcAddrs: h.CcAddrs,
 			Date: h.Date, Flags: h.Flags, Size: h.Size,
 		}

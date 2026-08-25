@@ -5,23 +5,25 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // MessageHeader is the set of header fields synced eagerly for every
 // message (bodies are fetched lazily — see Phase 3).
 type MessageHeader struct {
-	UID       uint32
-	MessageID string
-	InReplyTo string
-	Subject   string
-	FromName  string
-	FromAddr  string
-	ToAddrs   []string
-	CcAddrs   []string
-	Date      time.Time
-	Flags     []string
-	Size      int64
+	UID        uint32
+	MessageID  string
+	InReplyTo  string
+	References []string
+	Subject    string
+	FromName   string
+	FromAddr   string
+	ToAddrs    []string
+	CcAddrs    []string
+	Date       time.Time
+	Flags      []string
+	Size       int64
 }
 
 func (h MessageHeader) seen() bool {
@@ -48,12 +50,13 @@ func (db *DB) UpsertMessageHeaders(ctx context.Context, accountID, folderID int6
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO messages (
-			account_id, folder_id, uid, message_id, in_reply_to, subject,
+			account_id, folder_id, uid, message_id, in_reply_to, references_ids, subject,
 			from_name, from_addr, to_addrs, cc_addrs, date, flags, seen, size, synced_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(folder_id, uid) DO UPDATE SET
 			message_id = excluded.message_id,
 			in_reply_to = excluded.in_reply_to,
+			references_ids = excluded.references_ids,
 			subject = excluded.subject,
 			from_name = excluded.from_name,
 			from_addr = excluded.from_addr,
@@ -83,11 +86,15 @@ func (db *DB) UpsertMessageHeaders(ctx context.Context, accountID, folderID int6
 		if err != nil {
 			return fmt.Errorf("encode flags for uid=%d: %w", h.UID, err)
 		}
+		referencesJSON, err := json.Marshal(h.References)
+		if err != nil {
+			return fmt.Errorf("encode references for uid=%d: %w", h.UID, err)
+		}
 		seen := 0
 		if h.seen() {
 			seen = 1
 		}
-		if _, err := stmt.ExecContext(ctx, accountID, folderID, h.UID, h.MessageID, h.InReplyTo, h.Subject,
+		if _, err := stmt.ExecContext(ctx, accountID, folderID, h.UID, h.MessageID, h.InReplyTo, string(referencesJSON), h.Subject,
 			h.FromName, h.FromAddr, string(toJSON), string(ccJSON), h.Date, string(flagsJSON), seen, h.Size,
 		); err != nil {
 			return fmt.Errorf("upsert header uid=%d: %w", h.UID, err)
@@ -153,24 +160,25 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 
 // MessageRow is a cached message's header fields, as read back for display.
 type MessageRow struct {
-	UID       uint32
-	MessageID string
-	InReplyTo string
-	Subject   string
-	FromName  string
-	FromAddr  string
-	ToAddrs   []string
-	CcAddrs   []string
-	Date      time.Time
-	Flags     []string
-	Size      int64
+	UID        uint32
+	MessageID  string
+	InReplyTo  string
+	References []string
+	Subject    string
+	FromName   string
+	FromAddr   string
+	ToAddrs    []string
+	CcAddrs    []string
+	Date       time.Time
+	Flags      []string
+	Size       int64
 }
 
 // ListMessages returns up to limit cached messages for folderID, most
 // recent first.
 func (db *DB) ListMessages(ctx context.Context, folderID int64, limit int) ([]MessageRow, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT uid, message_id, in_reply_to, subject, from_name, from_addr, to_addrs, cc_addrs, date, flags, size
+		SELECT uid, message_id, in_reply_to, references_ids, subject, from_name, from_addr, to_addrs, cc_addrs, date, flags, size
 		FROM messages WHERE folder_id = ? ORDER BY date DESC, uid DESC LIMIT ?
 	`, folderID, limit)
 	if err != nil {
@@ -181,9 +189,9 @@ func (db *DB) ListMessages(ctx context.Context, folderID int64, limit int) ([]Me
 	var out []MessageRow
 	for rows.Next() {
 		var m MessageRow
-		var toJSON, ccJSON, flagsJSON string
+		var toJSON, ccJSON, flagsJSON, referencesJSON string
 		var date sql.NullTime
-		if err := rows.Scan(&m.UID, &m.MessageID, &m.InReplyTo, &m.Subject, &m.FromName, &m.FromAddr,
+		if err := rows.Scan(&m.UID, &m.MessageID, &m.InReplyTo, &referencesJSON, &m.Subject, &m.FromName, &m.FromAddr,
 			&toJSON, &ccJSON, &date, &flagsJSON, &m.Size); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
@@ -197,7 +205,64 @@ func (db *DB) ListMessages(ctx context.Context, folderID int64, limit int) ([]Me
 		if err := json.Unmarshal([]byte(flagsJSON), &m.Flags); err != nil {
 			return nil, fmt.Errorf("decode flags for uid=%d: %w", m.UID, err)
 		}
+		if err := json.Unmarshal([]byte(referencesJSON), &m.References); err != nil {
+			return nil, fmt.Errorf("decode references for uid=%d: %w", m.UID, err)
+		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// FindMessagesByMessageIDs looks up cached messages by their Message-ID
+// header, across all folders in accountID — used to resolve
+// in_reply_to/references_ids values into actual cached rows (e.g. a Sent
+// copy vs. an Inbox reply).
+func (db *DB) FindMessagesByMessageIDs(ctx context.Context, accountID int64, messageIDs []string) ([]SearchResultRow, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(messageIDs))
+	args := make([]any, 0, len(messageIDs)+1)
+	args = append(args, accountID)
+	for i, id := range messageIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT m.uid, m.message_id, m.in_reply_to, m.subject, m.from_name, m.from_addr,
+		       m.to_addrs, m.cc_addrs, m.date, m.flags, m.size, f.path
+		FROM messages m
+		JOIN folders f ON f.id = m.folder_id
+		WHERE m.account_id = ? AND m.message_id IN (%s)
+		ORDER BY m.date ASC
+	`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("find messages by message-id: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SearchResultRow
+	for rows.Next() {
+		var r SearchResultRow
+		var toJSON, ccJSON, flagsJSON string
+		var date sql.NullTime
+		if err := rows.Scan(&r.UID, &r.MessageID, &r.InReplyTo, &r.Subject, &r.FromName, &r.FromAddr,
+			&toJSON, &ccJSON, &date, &flagsJSON, &r.Size, &r.FolderPath); err != nil {
+			return nil, fmt.Errorf("scan related message: %w", err)
+		}
+		r.Date = date.Time
+		if err := json.Unmarshal([]byte(toJSON), &r.ToAddrs); err != nil {
+			return nil, fmt.Errorf("decode to_addrs for uid=%d: %w", r.UID, err)
+		}
+		if err := json.Unmarshal([]byte(ccJSON), &r.CcAddrs); err != nil {
+			return nil, fmt.Errorf("decode cc_addrs for uid=%d: %w", r.UID, err)
+		}
+		if err := json.Unmarshal([]byte(flagsJSON), &r.Flags); err != nil {
+			return nil, fmt.Errorf("decode flags for uid=%d: %w", r.UID, err)
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }
