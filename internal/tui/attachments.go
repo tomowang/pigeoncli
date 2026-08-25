@@ -98,8 +98,11 @@ func (m App) saveAttachmentCmd(uid uint32, folderPath string, index int, destPat
 func (m App) updateAttachmentPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
+		case "ctrl+c":
+			return m.handleCtrlC()
+		case "q":
+			m.quitting = true
+			return m, nil
 		case "esc":
 			m.pickingAttachment = false
 			return m, nil

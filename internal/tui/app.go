@@ -75,6 +75,8 @@ type App struct {
 	statusGen     int
 	showHelp      bool
 	showLog       bool
+	quitting      bool
+	lastCtrlC     time.Time
 
 	syncCh       chan folder.Progress
 	syncInterval time.Duration
@@ -119,25 +121,35 @@ type App struct {
 }
 
 func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
+	// DisableQuitKeybindings on every list: by default bubbles/list binds
+	// "q"/"esc" (Quit) and "ctrl+c" (ForceQuit) to return tea.Quit straight
+	// from the widget's own Update, which would exit the program immediately
+	// and skip App's quit-confirm prompt entirely. All quit handling is done
+	// at the App level instead (see handleCtrlC and the "quitting" state).
 	accounts := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	accounts.Title = "Accounts"
 	accounts.SetShowHelp(false)
+	accounts.DisableQuitKeybindings()
 
 	folders := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	folders.Title = "Folders"
 	folders.SetShowHelp(false)
+	folders.DisableQuitKeybindings()
 
 	messages := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	messages.Title = "Messages"
 	messages.SetShowHelp(false)
+	messages.DisableQuitKeybindings()
 
 	searchResultsList := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	searchResultsList.Title = "Search results"
 	searchResultsList.SetShowHelp(false)
+	searchResultsList.DisableQuitKeybindings()
 
 	attachmentPicker := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	attachmentPicker.Title = "Attachments"
 	attachmentPicker.SetShowHelp(false)
+	attachmentPicker.DisableQuitKeybindings()
 
 	defaultTheme, _ := themeByName("")
 
@@ -223,6 +235,25 @@ func (m App) openMessageCmd(msg message.Message) tea.Cmd {
 
 func (m App) Init() tea.Cmd {
 	return tea.Batch(m.loadAccountsCmd(), m.loadSettingsCmd(), tickCmd(m.syncInterval))
+}
+
+// ctrlCQuitWindow is how soon a second ctrl+c must follow the first to count
+// as a double-tap. A single ctrl+c behaves like "q" (opens the confirm
+// prompt); a second one within this window quits immediately, bypassing the
+// prompt — the conventional shell escape hatch for "no really, quit now".
+const ctrlCQuitWindow = time.Second
+
+// handleCtrlC implements that double-tap: it quits immediately if the
+// previous ctrl+c was recent enough, otherwise it records this press and
+// opens the confirm prompt like "q" would.
+func (m App) handleCtrlC() (App, tea.Cmd) {
+	now := time.Now()
+	if !m.lastCtrlC.IsZero() && now.Sub(m.lastCtrlC) < ctrlCQuitWindow {
+		return m, tea.Quit
+	}
+	m.lastCtrlC = now
+	m.quitting = true
+	return m, nil
 }
 
 func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -452,10 +483,27 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 	}
 
+	if m.quitting {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			switch key.String() {
+			case "y", "Y", "enter", "ctrl+c":
+				return m, tea.Quit
+			case "n", "N", "esc":
+				m.quitting = false
+				m.lastCtrlC = time.Time{}
+			}
+		}
+		return m, nil
+	}
+
 	if m.showHelp {
 		if key, ok := msg.(tea.KeyMsg); ok {
-			if key.String() == "q" || key.String() == "ctrl+c" {
-				return m, tea.Quit
+			switch key.String() {
+			case "ctrl+c":
+				return m.handleCtrlC()
+			case "q":
+				m.quitting = true
+				return m, nil
 			}
 			m.showHelp = false
 		}
@@ -464,8 +512,12 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.showLog {
 		if key, ok := msg.(tea.KeyMsg); ok {
-			if key.String() == "q" || key.String() == "ctrl+c" {
-				return m, tea.Quit
+			switch key.String() {
+			case "ctrl+c":
+				return m.handleCtrlC()
+			case "q":
+				m.quitting = true
+				return m, nil
 			}
 			m.showLog = false
 		}
@@ -507,8 +559,11 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
+		case "ctrl+c":
+			return m.handleCtrlC()
+		case "q":
+			m.quitting = true
+			return m, nil
 		case "?":
 			m.showHelp = true
 			return m, nil
@@ -591,8 +646,11 @@ func (m App) openSelection() (tea.Model, tea.Cmd) {
 
 func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "ctrl+c":
-		return m, tea.Quit
+	case "ctrl+c":
+		return m.handleCtrlC()
+	case "q":
+		m.quitting = true
+		return m, nil
 	case "esc", "backspace":
 		m.viewingMsg = nil
 		m.layout() // messages pane reclaims the width the preview panel was using
@@ -694,6 +752,10 @@ func (m *App) layout() {
 }
 
 func (m App) View() string {
+	if m.quitting {
+		return m.viewQuitConfirm()
+	}
+
 	if m.showHelp {
 		return m.viewHelp()
 	}
@@ -857,7 +919,8 @@ var helpSections = []helpSection{
 			{"/", "search subject/from/to/cc for the selected account"},
 			{"?", "toggle this help"},
 			{"L", "toggle the status log"},
-			{"q, ctrl+c", "quit"},
+			{"q / ctrl+c", "quit (asks to confirm)"},
+			{"ctrl+c ctrl+c", "quit immediately, no confirm (press twice)"},
 		},
 	},
 	{
@@ -900,6 +963,16 @@ func (m App) viewHelp() string {
 	}
 	lines = append(lines, "Press any key to close.")
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
+}
+
+// viewQuitConfirm renders the "quit pigeon?" prompt centered over an
+// otherwise blank frame. Bubbletea redraws the whole screen each View, so
+// there's no need to layer this over whatever mode triggered it — that
+// mode's state is left untouched on m and simply redrawn once quitting is
+// cancelled.
+func (m App) viewQuitConfirm() string {
+	box := m.theme.ActivePane.Render("Quit pigeon? (y/n)")
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // Run starts the Bubbletea program. It blocks until the user quits.

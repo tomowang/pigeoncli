@@ -61,8 +61,11 @@ func (m App) updateSearching(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m App) updateSearchResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
+		case "ctrl+c":
+			return m.handleCtrlC()
+		case "q":
+			m.quitting = true
+			return m, nil
 		case "esc":
 			m.showSearchResults = false
 			m = m.clearStatus()
