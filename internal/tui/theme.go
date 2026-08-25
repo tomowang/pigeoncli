@@ -14,6 +14,10 @@ type Theme struct {
 	ActivePane   lipgloss.Style
 	InactivePane lipgloss.Style
 	ViewHeader   lipgloss.Style
+
+	Card       lipgloss.Style
+	CardHeader lipgloss.Style
+	CardMeta   lipgloss.Style
 }
 
 // StatusStyle returns the status-bar style for sev.
@@ -40,6 +44,10 @@ var themes = map[string]Theme{
 		ActivePane:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")),
 		InactivePane: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")),
 		ViewHeader:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
+
+		Card:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(0, 1),
+		CardHeader: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
+		CardMeta:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
 	},
 	"dark": {
 		Name: "dark",
@@ -52,6 +60,10 @@ var themes = map[string]Theme{
 		ActivePane:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("135")),
 		InactivePane: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")),
 		ViewHeader:   lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("231")),
+
+		Card:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("135")).Padding(0, 1),
+		CardHeader: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")),
+		CardMeta:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 	},
 	"light": {
 		Name: "light",
@@ -64,6 +76,10 @@ var themes = map[string]Theme{
 		ActivePane:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("25")),
 		InactivePane: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("252")),
 		ViewHeader:   lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(lipgloss.Color("0")),
+
+		Card:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("25")).Padding(0, 1),
+		CardHeader: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")),
+		CardMeta:   lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
 	},
 }
 

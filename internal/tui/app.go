@@ -47,9 +47,10 @@ const (
 
 // App is the root Bubbletea model: an account list, a folder tree pane, and
 // a message list pane side by side, plus a status bar. Opening a message
-// replaces that row with a full-width raw/rendered viewer; replying from
-// there replaces it with a compose pane (To/Cc/Subject inputs over a body
-// textarea).
+// swaps the accounts/folders panes for a card-style preview panel on the
+// right of the message list (still raw/rendered toggleable); replying from
+// there replaces the whole screen with a compose pane (To/Cc/Subject inputs
+// over a body textarea).
 //
 // Update has no context parameter (that's the Elm architecture's shape),
 // but the account/folder/message/compose service calls triggered from
@@ -576,6 +577,7 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "esc", "backspace":
 		m.viewingMsg = nil
+		m.layout() // messages pane reclaims the width the preview panel was using
 		return m, nil
 	case "t":
 		m.viewingRaw = !m.viewingRaw
@@ -614,27 +616,43 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// cardHeaderLines is the number of lines viewCard renders above the
+// viewport's own content (subject, from, to, date, separator) — layout uses
+// this to size the viewport so the two stay in sync.
+const cardHeaderLines = 5
+
 // layout recomputes each pane's size from the current window size. Each
 // list pane is wrapped in a bordered box (see View), which costs 2 columns
 // and 2 rows, so that's subtracted from what's handed to the list widgets.
 func (m *App) layout() {
 	const borderWidth, borderHeight = 2, 2
+	const cardPaddingWidth = 2 // theme.Card's horizontal Padding(0, 1)
 
-	accountsWidth := max(m.width/5, 16)
-	foldersWidth := max(m.width/5, 16)
-	messagesWidth := max(m.width-accountsWidth-foldersWidth, 16)
 	paneHeight := m.height - 1 // reserve the status bar row
 
-	m.accounts.SetSize(max(accountsWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
-	m.folders.SetSize(max(foldersWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
-	m.messages.SetSize(max(messagesWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+	if m.viewingMsg != nil {
+		// Reading a message: accounts/folders make way for a card-style
+		// preview panel to the right of the (now narrower) message list.
+		messagesWidth := max(m.width/3, 20)
+		previewWidth := max(m.width-messagesWidth, 24)
 
-	viewportHeight := max(m.height-2, 1) // reserve the header and status bar rows
-	if m.viewingMsg != nil && len(m.viewBody.Attachments) > 0 {
-		viewportHeight = max(viewportHeight-1, 1) // reserve the attachments line
+		m.messages.SetSize(max(messagesWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+
+		viewportHeight := max(paneHeight-borderHeight-cardHeaderLines, 1)
+		if len(m.viewBody.Attachments) > 0 {
+			viewportHeight = max(viewportHeight-1, 1) // reserve the attachments line
+		}
+		m.viewport.Width = max(previewWidth-borderWidth-cardPaddingWidth, 1)
+		m.viewport.Height = viewportHeight
+	} else {
+		accountsWidth := max(m.width/5, 16)
+		foldersWidth := max(m.width/5, 16)
+		messagesWidth := max(m.width-accountsWidth-foldersWidth, 16)
+
+		m.accounts.SetSize(max(accountsWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+		m.folders.SetSize(max(foldersWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
+		m.messages.SetSize(max(messagesWidth-borderWidth, 1), max(paneHeight-borderHeight, 1))
 	}
-	m.viewport.Width = m.width
-	m.viewport.Height = viewportHeight
 
 	m.searchInput.Width = max(m.width-4, 10)
 	m.searchResultsList.SetSize(m.width, max(m.height-2, 1)) // reserve the header and status bar rows
@@ -691,12 +709,11 @@ func (m App) View() string {
 	}
 
 	if m.viewingMsg != nil {
-		header := m.theme.ViewHeader.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
-		body := header + "\n" + m.viewport.View()
-		if line := m.attachmentsLine(); line != "" {
-			body += "\n" + line
-		}
-		return body + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+		row := lipgloss.JoinHorizontal(lipgloss.Top,
+			m.theme.InactivePane.Render(m.messages.View()),
+			m.theme.Card.Render(m.viewCard()),
+		)
+		return row + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
 	}
 
 	accountsStyle, foldersStyle, messagesStyle := m.theme.InactivePane, m.theme.InactivePane, m.theme.InactivePane
@@ -715,6 +732,34 @@ func (m App) View() string {
 		messagesStyle.Render(m.messages.View()),
 	)
 	return row + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
+}
+
+// viewCard renders the currently viewed message as card content: a subject
+// header, From/To/Date meta, a separator, then the raw/rendered body in the
+// viewport. Its line count above the viewport must track cardHeaderLines in
+// layout so the viewport is always sized to fit without clipping or gaps.
+func (m App) viewCard() string {
+	to := strings.Join(m.viewingMsg.ToAddrs, ", ")
+	if to == "" {
+		to = "-"
+	}
+	from := m.viewingMsg.FromAddr
+	if m.viewingMsg.FromName != "" {
+		from = fmt.Sprintf("%s <%s>", m.viewingMsg.FromName, m.viewingMsg.FromAddr)
+	}
+
+	lines := []string{
+		m.theme.CardHeader.Render(m.viewingMsg.Subject),
+		m.theme.CardMeta.Render("From: " + from),
+		m.theme.CardMeta.Render("To:   " + to),
+		m.theme.CardMeta.Render("Date: " + m.viewingMsg.Date.Format("2006-01-02 15:04")),
+		m.theme.CardMeta.Render(strings.Repeat("─", m.viewport.Width)),
+		m.viewport.View(),
+	}
+	if line := m.attachmentsLine(); line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m App) statusLine() string {
