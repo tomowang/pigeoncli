@@ -41,6 +41,17 @@ type Body struct {
 	PlainText string
 }
 
+// SearchResult is a header-search hit, carrying the folder it lives in so
+// callers can open it directly.
+type SearchResult struct {
+	Message
+	FolderPath string
+}
+
+// searchLimit caps how many results Search returns, matching listLimit's
+// personal-mailbox-scale reasoning.
+const searchLimit = 200
+
 // Service reads cached message headers and lazily fetches/caches message
 // bodies on first open.
 type Service struct {
@@ -72,6 +83,37 @@ func (s *Service) List(ctx context.Context, accountSlug, folderPath string) ([]M
 			UID: r.UID, MessageID: r.MessageID, InReplyTo: r.InReplyTo, Subject: r.Subject,
 			FromName: r.FromName, FromAddr: r.FromAddr, ToAddrs: r.ToAddrs, CcAddrs: r.CcAddrs,
 			Date: r.Date, Flags: r.Flags, Size: r.Size,
+		}
+	}
+	return out, nil
+}
+
+// Search runs a full-text search over subject/from/to/cc headers for
+// accountSlug's synced messages. It reads only from the local FTS5 index —
+// bodies aren't searched, since they're only cached after a message has
+// been opened.
+func (s *Service) Search(ctx context.Context, accountSlug, query string) ([]SearchResult, error) {
+	accountID, ok, err := s.db.AccountID(ctx, accountSlug)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("account %q has not been synced yet", accountSlug)
+	}
+
+	rows, err := s.db.SearchMessages(ctx, accountID, query, searchLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SearchResult, len(rows))
+	for i, r := range rows {
+		out[i] = SearchResult{
+			Message: Message{
+				UID: r.UID, MessageID: r.MessageID, InReplyTo: r.InReplyTo, Subject: r.Subject,
+				FromName: r.FromName, FromAddr: r.FromAddr, ToAddrs: r.ToAddrs, CcAddrs: r.CcAddrs,
+				Date: r.Date, Flags: r.Flags, Size: r.Size,
+			},
+			FolderPath: r.FolderPath,
 		}
 	}
 	return out, nil

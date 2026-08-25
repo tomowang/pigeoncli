@@ -59,6 +59,34 @@ func TestListReturnsCachedHeaders(t *testing.T) {
 	}
 }
 
+func TestSearchReturnsMatchesWithFolderPath(t *testing.T) {
+	ctx := context.Background()
+	svc, db, accountID, folderID := newTestService(t)
+
+	headers := []sqlite.MessageHeader{
+		{UID: 1, Subject: "Quarterly Report", FromAddr: "alice@example.com", Date: time.Now()},
+		{UID: 2, Subject: "Lunch plans", FromAddr: "bob@example.com", Date: time.Now()},
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, folderID, headers); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	results, err := svc.Search(ctx, "work", "quarterly")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 || results[0].Subject != "Quarterly Report" || results[0].FolderPath != "INBOX" {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+}
+
+func TestSearchUnknownAccountErrors(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	if _, err := svc.Search(context.Background(), "nope", "quarterly"); err == nil {
+		t.Fatalf("expected error for unsynced account")
+	}
+}
+
 func TestListUnknownAccountErrors(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	if _, err := svc.List(context.Background(), "nope", "INBOX"); err == nil {

@@ -97,6 +97,11 @@ type App struct {
 	composeBody       textarea.Model
 	composeInReplyTo  string
 	composeReferences string
+
+	searching         bool
+	searchInput       textinput.Model
+	showSearchResults bool
+	searchResultsList list.Model
 }
 
 func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
@@ -112,21 +117,26 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 	messages.Title = "Messages"
 	messages.SetShowHelp(false)
 
+	searchResultsList := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	searchResultsList.Title = "Search results"
+	searchResultsList.SetShowHelp(false)
+
 	defaultTheme, _ := themeByName("")
 
 	return App{
-		ctx:          ctx,
-		accountSvc:   accountSvc,
-		folderSvc:    folderSvc,
-		messageSvc:   messageSvc,
-		composeSvc:   composeSvc,
-		settingsSvc:  settingsSvc,
-		theme:        defaultTheme,
-		accounts:     accounts,
-		folders:      folders,
-		messages:     messages,
-		viewport:     viewport.New(0, 0),
-		syncInterval: defaultSyncInterval,
+		ctx:               ctx,
+		accountSvc:        accountSvc,
+		folderSvc:         folderSvc,
+		messageSvc:        messageSvc,
+		composeSvc:        composeSvc,
+		settingsSvc:       settingsSvc,
+		theme:             defaultTheme,
+		accounts:          accounts,
+		folders:           folders,
+		messages:          messages,
+		searchResultsList: searchResultsList,
+		viewport:          viewport.New(0, 0),
+		syncInterval:      defaultSyncInterval,
 	}
 }
 
@@ -333,6 +343,26 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmd, listenSyncProgressCmd(m.syncCh))
 
+	case searchResultsMsg:
+		if msg.err != nil {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("search failed: %v", msg.err), sevError)
+			return m, cmd
+		}
+		items := make([]list.Item, len(msg.results))
+		for i, r := range msg.results {
+			items[i] = searchResultItem(r)
+		}
+		m.searchResultsList.SetItems(items)
+		m.showSearchResults = true
+		if len(msg.results) == 0 {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus("No results.", sevInfo)
+			return m, cmd
+		}
+		m = m.clearStatus()
+		return m, nil
+
 	case syncDoneMsg:
 		m.syncCh = nil
 		var cmd tea.Cmd
@@ -364,6 +394,14 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.searching {
+		return m.updateSearching(msg)
+	}
+
+	if m.showSearchResults {
+		return m.updateSearchResults(msg)
+	}
+
 	if m.composing {
 		return m.updateComposing(msg)
 	}
@@ -387,6 +425,13 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "L":
 			m.showLog = true
 			return m, nil
+		case "/":
+			if m.selectedAccount.Slug == "" {
+				var cmd tea.Cmd
+				m, cmd = m.setStatus("No account selected.", sevInfo)
+				return m, cmd
+			}
+			return m.enterSearch(), nil
 		case "tab":
 			m.focus = (m.focus + 1) % 3
 			return m, nil
@@ -496,6 +541,9 @@ func (m *App) layout() {
 	m.viewport.Width = m.width
 	m.viewport.Height = max(m.height-2, 1) // reserve the header and status bar rows
 
+	m.searchInput.Width = max(m.width-4, 10)
+	m.searchResultsList.SetSize(m.width, max(m.height-2, 1)) // reserve the header and status bar rows
+
 	if m.composing {
 		m.composeTo.Width = max(m.width-4, 10)
 		m.composeCc.Width = max(m.width-4, 10)
@@ -512,6 +560,14 @@ func (m App) View() string {
 
 	if m.showLog {
 		return m.viewLog()
+	}
+
+	if m.searching {
+		return m.viewSearch()
+	}
+
+	if m.showSearchResults {
+		return m.viewSearchResults()
 	}
 
 	if m.composing {
@@ -555,7 +611,7 @@ func (m App) statusLine() string {
 		}
 		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · esc: back · q: quit", mode)
 	}
-	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · ?: help · L: log · q: quit"
+	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · ?: help · L: log · q: quit"
 }
 
 // helpSection is one titled group of keybinding rows in the help overlay.
@@ -578,6 +634,7 @@ var helpSections = []helpSection{
 			{"enter", "open selection"},
 			{"c", "compose a new message"},
 			{"s", "sync the selected account (also runs automatically in the background)"},
+			{"/", "search subject/from/to/cc for the selected account"},
 			{"?", "toggle this help"},
 			{"L", "toggle the status log"},
 			{"q, ctrl+c", "quit"},

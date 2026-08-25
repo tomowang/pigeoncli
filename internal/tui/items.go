@@ -51,6 +51,24 @@ func (m messageItem) Description() string {
 	return fmt.Sprintf("%s — %s", from, m.Date.Format("2006-01-02 15:04"))
 }
 
+// searchResultItem adapts message.SearchResult to bubbles/list's
+// Item/DefaultItem.
+type searchResultItem message.SearchResult
+
+func (s searchResultItem) FilterValue() string { return s.Subject }
+
+func (s searchResultItem) Title() string {
+	return fmt.Sprintf("%s — %s", s.Subject, s.FolderPath)
+}
+
+func (s searchResultItem) Description() string {
+	from := s.FromAddr
+	if s.FromName != "" {
+		from = s.FromName
+	}
+	return fmt.Sprintf("%s — %s", from, s.Date.Format("2006-01-02 15:04"))
+}
+
 func hasFlag(flags []string, want string) bool {
 	for _, f := range flags {
 		if f == want {
