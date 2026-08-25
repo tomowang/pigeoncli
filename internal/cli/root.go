@@ -9,6 +9,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
+	"github.com/tomowang/pigeoncli/internal/core/settings"
 	"github.com/tomowang/pigeoncli/internal/core/signature"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
@@ -34,6 +35,10 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			resolvedCfgPath, err := resolveConfigPath()
+			if err != nil {
+				return err
+			}
 			db, err := openDB(cmd.Context())
 			if err != nil {
 				return err
@@ -49,8 +54,9 @@ func newRootCmd() *cobra.Command {
 			messageSvc := message.NewService(db, blobs)
 			signatureSvc := signature.NewService(db)
 			composeSvc := compose.NewService(folderSvc, signatureSvc)
+			settingsSvc := settings.NewService(resolvedCfgPath)
 
-			return tui.Run(cmd.Context(), acctSvc, folderSvc, messageSvc, composeSvc)
+			return tui.Run(cmd.Context(), acctSvc, folderSvc, messageSvc, composeSvc, settingsSvc)
 		},
 	}
 

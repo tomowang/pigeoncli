@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -23,6 +24,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
+	"github.com/tomowang/pigeoncli/internal/core/settings"
 )
 
 var (
@@ -63,10 +65,11 @@ const (
 type App struct {
 	ctx context.Context
 
-	accountSvc *account.Service
-	folderSvc  *folder.Service
-	messageSvc *message.Service
-	composeSvc *compose.Service
+	accountSvc  *account.Service
+	folderSvc   *folder.Service
+	messageSvc  *message.Service
+	composeSvc  *compose.Service
+	settingsSvc *settings.Service
 
 	width, height int
 	focus         focusPane
@@ -75,6 +78,9 @@ type App struct {
 	statusGen     int
 	showHelp      bool
 	showLog       bool
+
+	syncCh       chan folder.Progress
+	syncInterval time.Duration
 
 	accounts list.Model
 	folders  list.Model
@@ -98,7 +104,7 @@ type App struct {
 	composeReferences string
 }
 
-func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service) App {
+func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
 	accounts := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	accounts.Title = "Accounts"
 	accounts.SetShowHelp(false)
@@ -112,15 +118,17 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 	messages.SetShowHelp(false)
 
 	return App{
-		ctx:        ctx,
-		accountSvc: accountSvc,
-		folderSvc:  folderSvc,
-		messageSvc: messageSvc,
-		composeSvc: composeSvc,
-		accounts:   accounts,
-		folders:    folders,
-		messages:   messages,
-		viewport:   viewport.New(0, 0),
+		ctx:          ctx,
+		accountSvc:   accountSvc,
+		folderSvc:    folderSvc,
+		messageSvc:   messageSvc,
+		composeSvc:   composeSvc,
+		settingsSvc:  settingsSvc,
+		accounts:     accounts,
+		folders:      folders,
+		messages:     messages,
+		viewport:     viewport.New(0, 0),
+		syncInterval: defaultSyncInterval,
 	}
 }
 
@@ -149,10 +157,6 @@ type messageBodyLoadedMsg struct {
 }
 
 type sendResultMsg struct {
-	err error
-}
-
-type syncResultMsg struct {
 	err error
 }
 
@@ -186,15 +190,8 @@ func (m App) openMessageCmd(msg message.Message) tea.Cmd {
 	}
 }
 
-func (m App) syncSelectedAccountCmd() tea.Cmd {
-	cfg := m.selectedAccount
-	return func() tea.Msg {
-		return syncResultMsg{err: m.folderSvc.Sync(m.ctx, cfg, nil)}
-	}
-}
-
 func (m App) Init() tea.Cmd {
-	return m.loadAccountsCmd()
+	return tea.Batch(m.loadAccountsCmd(), m.loadSettingsCmd(), tickCmd(m.syncInterval))
 }
 
 func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -299,14 +296,46 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// copy); reload folders so this pane's counts reflect that too.
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 
-	case syncResultMsg:
+	case settingsLoadedMsg:
 		if msg.err != nil {
 			var cmd tea.Cmd
-			m, cmd = m.setStatus(fmt.Sprintf("sync failed: %v", msg.err), sevError)
+			m, cmd = m.setStatus(fmt.Sprintf("load settings: %v", msg.err), sevError)
 			return m, cmd
 		}
+		if msg.settings.SyncInterval > 0 {
+			m.syncInterval = msg.settings.SyncInterval
+		}
+		return m, nil
+
+	case syncTickMsg:
+		cmds := []tea.Cmd{tickCmd(m.syncInterval)}
+		if m.syncCh == nil && m.selectedAccount.Slug != "" {
+			ch := make(chan folder.Progress)
+			m.syncCh = ch
+			var statusCmd tea.Cmd
+			m, statusCmd = m.setStatus("Background sync starting…", sevInfo)
+			cmds = append(cmds, statusCmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch))
+		}
+		return m, tea.Batch(cmds...)
+
+	case syncProgressMsg:
+		p := msg.progress
 		var cmd tea.Cmd
-		m, cmd = m.setStatus("Sync complete.", sevSuccess)
+		if p.Err != nil {
+			m, cmd = m.setStatus(fmt.Sprintf("sync %s: %v", p.Path, p.Err), sevError)
+		} else {
+			m, cmd = m.setStatus(fmt.Sprintf("sync %s: %d messages (%d unread)", p.Path, p.TotalCount, p.UnreadCount), sevInfo)
+		}
+		return m, tea.Batch(cmd, listenSyncProgressCmd(m.syncCh))
+
+	case syncDoneMsg:
+		m.syncCh = nil
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m, cmd = m.setStatus(fmt.Sprintf("sync failed: %v", msg.err), sevError)
+		} else {
+			m, cmd = m.setStatus("Sync complete.", sevSuccess)
+		}
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 	}
 
@@ -371,9 +400,16 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m, cmd = m.setStatus("No account selected.", sevInfo)
 				return m, cmd
 			}
+			if m.syncCh != nil {
+				var cmd tea.Cmd
+				m, cmd = m.setStatus("Sync already in progress.", sevInfo)
+				return m, cmd
+			}
+			ch := make(chan folder.Progress)
+			m.syncCh = ch
 			var cmd tea.Cmd
 			m, cmd = m.setStatus("Syncing...", sevInfo)
-			return m, tea.Batch(cmd, m.syncSelectedAccountCmd())
+			return m, tea.Batch(cmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch))
 		}
 	}
 
@@ -547,8 +583,8 @@ func (m App) viewHelp() string {
 }
 
 // Run starts the Bubbletea program. It blocks until the user quits.
-func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service) error {
-	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc, composeSvc), tea.WithContext(ctx), tea.WithAltScreen())
+func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) error {
+	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc, composeSvc, settingsSvc), tea.WithContext(ctx), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}

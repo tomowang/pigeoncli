@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -46,9 +47,28 @@ type Account struct {
 	SMTP        ServerConfig `toml:"smtp"`
 }
 
+// SyncConfig controls periodic background sync behavior.
+type SyncConfig struct {
+	IntervalMinutes int `toml:"interval_minutes,omitempty"`
+}
+
+// defaultSyncIntervalMinutes is used when IntervalMinutes is unset or
+// non-positive.
+const defaultSyncIntervalMinutes = 5
+
+// Interval returns the configured background sync interval, defaulting to
+// 5 minutes when IntervalMinutes is unset or non-positive.
+func (s SyncConfig) Interval() time.Duration {
+	if s.IntervalMinutes <= 0 {
+		return defaultSyncIntervalMinutes * time.Minute
+	}
+	return time.Duration(s.IntervalMinutes) * time.Minute
+}
+
 // Config is the root of pigeon's TOML config file.
 type Config struct {
-	Accounts []Account `toml:"accounts"`
+	Accounts []Account  `toml:"accounts"`
+	Sync     SyncConfig `toml:"sync,omitempty"`
 }
 
 // DefaultPath returns the default config file path
