@@ -27,13 +27,6 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/settings"
 )
 
-var (
-	activePaneStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
-	inactivePaneStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
-
-	viewHeaderStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1)
-)
-
 type focusPane int
 
 const (
@@ -70,6 +63,8 @@ type App struct {
 	messageSvc  *message.Service
 	composeSvc  *compose.Service
 	settingsSvc *settings.Service
+
+	theme Theme
 
 	width, height int
 	focus         focusPane
@@ -117,6 +112,8 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 	messages.Title = "Messages"
 	messages.SetShowHelp(false)
 
+	defaultTheme, _ := themeByName("")
+
 	return App{
 		ctx:          ctx,
 		accountSvc:   accountSvc,
@@ -124,6 +121,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		messageSvc:   messageSvc,
 		composeSvc:   composeSvc,
 		settingsSvc:  settingsSvc,
+		theme:        defaultTheme,
 		accounts:     accounts,
 		folders:      folders,
 		messages:     messages,
@@ -304,6 +302,13 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.settings.SyncInterval > 0 {
 			m.syncInterval = msg.settings.SyncInterval
+		}
+		theme, ok := themeByName(msg.settings.Theme)
+		m.theme = theme
+		if !ok {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("unknown theme %q, using default", msg.settings.Theme), sevInfo)
+			return m, cmd
 		}
 		return m, nil
 
@@ -514,18 +519,18 @@ func (m App) View() string {
 	}
 
 	if m.viewingMsg != nil {
-		header := viewHeaderStyle.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
-		return header + "\n" + m.viewport.View() + "\n" + statusStyleFor(m.status.sev).Render(m.statusLine())
+		header := m.theme.ViewHeader.Render(fmt.Sprintf("%s — from %s", m.viewingMsg.Subject, m.viewingMsg.FromAddr))
+		return header + "\n" + m.viewport.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
 	}
 
-	accountsStyle, foldersStyle, messagesStyle := inactivePaneStyle, inactivePaneStyle, inactivePaneStyle
+	accountsStyle, foldersStyle, messagesStyle := m.theme.InactivePane, m.theme.InactivePane, m.theme.InactivePane
 	switch m.focus {
 	case focusAccounts:
-		accountsStyle = activePaneStyle
+		accountsStyle = m.theme.ActivePane
 	case focusFolders:
-		foldersStyle = activePaneStyle
+		foldersStyle = m.theme.ActivePane
 	case focusMessages:
-		messagesStyle = activePaneStyle
+		messagesStyle = m.theme.ActivePane
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -533,7 +538,7 @@ func (m App) View() string {
 		foldersStyle.Render(m.folders.View()),
 		messagesStyle.Render(m.messages.View()),
 	)
-	return row + "\n" + statusStyleFor(m.status.sev).Render(m.statusLine())
+	return row + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
 }
 
 func (m App) statusLine() string {

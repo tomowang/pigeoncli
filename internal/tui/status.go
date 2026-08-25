@@ -37,37 +37,6 @@ const statusHistoryCap = 100
 // setStatus call) can't wipe out a status set after it.
 type statusClearMsg struct{ gen int }
 
-var (
-	statusInfoStyle = lipgloss.NewStyle().
-			Bold(true).
-			Padding(0, 1).
-			Foreground(lipgloss.Color("15")).
-			Background(lipgloss.Color("62"))
-
-	statusSuccessStyle = lipgloss.NewStyle().
-				Bold(true).
-				Padding(0, 1).
-				Foreground(lipgloss.Color("15")).
-				Background(lipgloss.Color("28"))
-
-	statusErrorStyle = lipgloss.NewStyle().
-				Bold(true).
-				Padding(0, 1).
-				Foreground(lipgloss.Color("15")).
-				Background(lipgloss.Color("124"))
-)
-
-func statusStyleFor(sev severity) lipgloss.Style {
-	switch sev {
-	case sevSuccess:
-		return statusSuccessStyle
-	case sevError:
-		return statusErrorStyle
-	default:
-		return statusInfoStyle
-	}
-}
-
 // setStatus records text as the current status and appends it to history.
 // info/success messages auto-clear after a few seconds (via statusClearMsg);
 // error messages persist until the next setStatus call so they aren't
@@ -108,7 +77,7 @@ func (m App) viewLog() string {
 	lines = append(lines, "pigeon — log", "")
 	for i := len(m.statusHistory) - 1; i >= 0; i-- {
 		e := m.statusHistory[i]
-		lines = append(lines, statusStyleFor(e.sev).Render(fmt.Sprintf(" %s ", e.at.Format("15:04:05")))+" "+e.text)
+		lines = append(lines, m.theme.StatusStyle(e.sev).Render(fmt.Sprintf(" %s ", e.at.Format("15:04:05")))+" "+e.text)
 	}
 	lines = append(lines, "", "Press any key to close.")
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))

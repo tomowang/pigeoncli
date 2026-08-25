@@ -13,6 +13,7 @@ import (
 // Settings holds the user preferences internal/tui reads at startup.
 type Settings struct {
 	SyncInterval time.Duration
+	Theme        string
 }
 
 // Service reads Settings from the config file. A Service is cheap to
@@ -33,5 +34,5 @@ func (s *Service) Get(ctx context.Context) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	return Settings{SyncInterval: cfg.Sync.Interval()}, nil
+	return Settings{SyncInterval: cfg.Sync.Interval(), Theme: cfg.UI.Theme}, nil
 }

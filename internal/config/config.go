@@ -65,10 +65,16 @@ func (s SyncConfig) Interval() time.Duration {
 	return time.Duration(s.IntervalMinutes) * time.Minute
 }
 
+// UIConfig controls terminal UI preferences.
+type UIConfig struct {
+	Theme string `toml:"theme,omitempty"`
+}
+
 // Config is the root of pigeon's TOML config file.
 type Config struct {
 	Accounts []Account  `toml:"accounts"`
 	Sync     SyncConfig `toml:"sync,omitempty"`
+	UI       UIConfig   `toml:"ui,omitempty"`
 }
 
 // DefaultPath returns the default config file path

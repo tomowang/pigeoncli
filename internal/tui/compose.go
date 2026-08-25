@@ -162,5 +162,5 @@ func (m App) viewCompose() string {
 		m.composeSubject.View(),
 		m.composeBody.View(),
 	)
-	return fields + "\n" + statusStyleFor(m.status.sev).Render(m.statusLine())
+	return fields + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
 }
