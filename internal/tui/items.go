@@ -37,10 +37,14 @@ type messageItem message.Message
 func (m messageItem) FilterValue() string { return m.Subject }
 
 func (m messageItem) Title() string {
-	if !hasFlag(m.Flags, `\Seen`) {
-		return "* " + m.Subject
+	title := m.Subject
+	if m.InReplyTo != "" || len(m.References) > 0 {
+		title = "↩ " + title
 	}
-	return m.Subject
+	if !hasFlag(m.Flags, `\Seen`) {
+		title = "* " + title
+	}
+	return title
 }
 
 func (m messageItem) Description() string {

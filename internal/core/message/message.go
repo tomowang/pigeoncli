@@ -21,17 +21,18 @@ const listLimit = 200
 // Message is the message-header DTO used by internal/cli, internal/tui,
 // and (later) internal/httpapi.
 type Message struct {
-	UID       uint32
-	MessageID string
-	InReplyTo string
-	Subject   string
-	FromName  string
-	FromAddr  string
-	ToAddrs   []string
-	CcAddrs   []string
-	Date      time.Time
-	Flags     []string
-	Size      int64
+	UID        uint32
+	MessageID  string
+	InReplyTo  string
+	References []string
+	Subject    string
+	FromName   string
+	FromAddr   string
+	ToAddrs    []string
+	CcAddrs    []string
+	Date       time.Time
+	Flags      []string
+	Size       int64
 }
 
 // Body is a message's content, both as originally received and rendered
@@ -80,9 +81,60 @@ func (s *Service) List(ctx context.Context, accountSlug, folderPath string) ([]M
 	out := make([]Message, len(rows))
 	for i, r := range rows {
 		out[i] = Message{
-			UID: r.UID, MessageID: r.MessageID, InReplyTo: r.InReplyTo, Subject: r.Subject,
+			UID: r.UID, MessageID: r.MessageID, InReplyTo: r.InReplyTo, References: r.References, Subject: r.Subject,
 			FromName: r.FromName, FromAddr: r.FromAddr, ToAddrs: r.ToAddrs, CcAddrs: r.CcAddrs,
 			Date: r.Date, Flags: r.Flags, Size: r.Size,
+		}
+	}
+	return out, nil
+}
+
+// Related returns the cached messages that msg's In-Reply-To/References
+// headers point to, across all of accountSlug's synced folders (e.g.
+// matching a Sent copy to an Inbox reply). It reads only from the local
+// cache.
+func (s *Service) Related(ctx context.Context, accountSlug string, msg Message) ([]SearchResult, error) {
+	accountID, ok, err := s.db.AccountID(ctx, accountSlug)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("account %q has not been synced yet", accountSlug)
+	}
+
+	seen := make(map[string]struct{}, len(msg.References)+1)
+	var ids []string
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	add(msg.InReplyTo)
+	for _, r := range msg.References {
+		add(r)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := s.db.FindMessagesByMessageIDs(ctx, accountID, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SearchResult, len(rows))
+	for i, r := range rows {
+		out[i] = SearchResult{
+			Message: Message{
+				UID: r.UID, MessageID: r.MessageID, InReplyTo: r.InReplyTo, Subject: r.Subject,
+				FromName: r.FromName, FromAddr: r.FromAddr, ToAddrs: r.ToAddrs, CcAddrs: r.CcAddrs,
+				Date: r.Date, Flags: r.Flags, Size: r.Size,
+			},
+			FolderPath: r.FolderPath,
 		}
 	}
 	return out, nil

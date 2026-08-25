@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -86,6 +88,6 @@ func (m App) viewSearch() string {
 }
 
 func (m App) viewSearchResults() string {
-	header := m.theme.ViewHeader.Render("Search results — enter: open · esc: back")
+	header := m.theme.ViewHeader.Render(fmt.Sprintf("%s — enter: open · esc: back", m.searchResultsList.Title))
 	return header + "\n" + m.searchResultsList.View() + "\n" + m.theme.StatusStyle(m.status.sev).Render(m.statusLine())
 }

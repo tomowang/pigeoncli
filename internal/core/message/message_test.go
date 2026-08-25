@@ -87,6 +87,46 @@ func TestSearchUnknownAccountErrors(t *testing.T) {
 	}
 }
 
+func TestRelatedResolvesInReplyToAndReferencesAcrossFolders(t *testing.T) {
+	ctx := context.Background()
+	svc, db, accountID, inboxID := newTestService(t)
+
+	sentID, err := db.UpsertFolder(ctx, accountID, "Sent", "Sent", "/", `\Sent`)
+	if err != nil {
+		t.Fatalf("UpsertFolder (sent): %v", err)
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, sentID, []sqlite.MessageHeader{
+		{UID: 1, MessageID: "<original@example.com>", Subject: "Original", Date: time.Now()},
+	}); err != nil {
+		t.Fatalf("UpsertMessageHeaders (sent): %v", err)
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, inboxID, []sqlite.MessageHeader{
+		{UID: 1, MessageID: "<reply@example.com>", Subject: "Re: Original", Date: time.Now()},
+	}); err != nil {
+		t.Fatalf("UpsertMessageHeaders (inbox): %v", err)
+	}
+
+	reply := Message{InReplyTo: "<original@example.com>", References: []string{"<original@example.com>"}}
+	related, err := svc.Related(ctx, "work", reply)
+	if err != nil {
+		t.Fatalf("Related: %v", err)
+	}
+	if len(related) != 1 || related[0].Subject != "Original" || related[0].FolderPath != "Sent" {
+		t.Fatalf("unexpected related messages: %+v", related)
+	}
+}
+
+func TestRelatedWithNoReferencesReturnsEmpty(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	related, err := svc.Related(context.Background(), "work", Message{})
+	if err != nil {
+		t.Fatalf("Related: %v", err)
+	}
+	if len(related) != 0 {
+		t.Fatalf("expected no related messages, got %+v", related)
+	}
+}
+
 func TestListUnknownAccountErrors(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	if _, err := svc.List(context.Background(), "nope", "INBOX"); err == nil {

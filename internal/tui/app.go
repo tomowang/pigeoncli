@@ -353,6 +353,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, r := range msg.results {
 			items[i] = searchResultItem(r)
 		}
+		m.searchResultsList.Title = "Search results"
 		m.searchResultsList.SetItems(items)
 		m.showSearchResults = true
 		if len(msg.results) == 0 {
@@ -360,6 +361,27 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m, cmd = m.setStatus("No results.", sevInfo)
 			return m, cmd
 		}
+		m = m.clearStatus()
+		return m, nil
+
+	case relatedLoadedMsg:
+		if msg.err != nil {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("related messages: %v", msg.err), sevError)
+			return m, cmd
+		}
+		if len(msg.results) == 0 {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus("No related messages found.", sevInfo)
+			return m, cmd
+		}
+		items := make([]list.Item, len(msg.results))
+		for i, r := range msg.results {
+			items[i] = searchResultItem(r)
+		}
+		m.searchResultsList.Title = "Related messages"
+		m.searchResultsList.SetItems(items)
+		m.showSearchResults = true
 		m = m.clearStatus()
 		return m, nil
 
@@ -517,6 +539,13 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startReply(false)
 	case "R":
 		return m.startReply(true)
+	case "g":
+		if m.viewingMsg == nil {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m, cmd = m.setStatus("Loading related messages...", sevInfo)
+		return m, tea.Batch(cmd, m.relatedCmd(*m.viewingMsg))
 	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -646,6 +675,7 @@ var helpSections = []helpSection{
 			{"r", "reply"},
 			{"R", "reply-all"},
 			{"t", "toggle raw / rendered"},
+			{"g", "go to related messages (In-Reply-To / References)"},
 			{"esc", "back to message list"},
 		},
 	},
