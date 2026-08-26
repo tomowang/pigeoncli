@@ -39,7 +39,7 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer cl.Close()
+	defer func() { _ = cl.Close() }()
 	defer cl.WatchContext(ctx)()
 
 	accountID, err := db.UpsertAccount(ctx, a.Slug, a.Email, a.DisplayName)

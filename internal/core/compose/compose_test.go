@@ -79,8 +79,7 @@ func TestServiceNewReplyAppendsDefaultSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer db.Close()
-
+	defer func() { _ = db.Close() }()
 	sigSvc := signature.NewService(db)
 	if _, err := sigSvc.Add(ctx, "", "Global", "-- \nSent from pigeon", true); err != nil {
 		t.Fatalf("Add signature: %v", err)
@@ -116,8 +115,7 @@ func TestNewMessageIsEmptyWithSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer db.Close()
-
+	defer func() { _ = db.Close() }()
 	sigSvc := signature.NewService(db)
 	if _, err := sigSvc.Add(ctx, "", "Global", "-- \nSent from pigeon", true); err != nil {
 		t.Fatalf("Add signature: %v", err)

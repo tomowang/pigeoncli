@@ -46,7 +46,7 @@ func (db *DB) UpsertMessageHeaders(ctx context.Context, accountID, folderID int6
 	if err != nil {
 		return fmt.Errorf("begin upsert headers: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO messages (
@@ -71,7 +71,7 @@ func (db *DB) UpsertMessageHeaders(ctx context.Context, accountID, folderID int6
 	if err != nil {
 		return fmt.Errorf("prepare upsert headers: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, h := range headers {
 		toJSON, err := json.Marshal(h.ToAddrs)
@@ -120,7 +120,7 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 	for rows.Next() {
 		var uid uint32
 		if err := rows.Scan(&uid); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("scan cached uid: %w", err)
 		}
 		if _, ok := keep[uid]; !ok {
@@ -128,10 +128,10 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	if len(stale) == 0 {
 		return nil
@@ -141,13 +141,13 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 	if err != nil {
 		return fmt.Errorf("begin delete stale messages: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx, "DELETE FROM messages WHERE folder_id = ? AND uid = ?")
 	if err != nil {
 		return fmt.Errorf("prepare delete stale messages: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, uid := range stale {
 		if _, err := stmt.ExecContext(ctx, folderID, uid); err != nil {
@@ -213,7 +213,7 @@ func (db *DB) ListMessages(ctx context.Context, folderID int64, limit int) ([]Me
 	if err != nil {
 		return nil, fmt.Errorf("list messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []MessageRow
 	for rows.Next() {
@@ -270,7 +270,7 @@ func (db *DB) FindMessagesByMessageIDs(ctx context.Context, accountID int64, mes
 	if err != nil {
 		return nil, fmt.Errorf("find messages by message-id: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []SearchResultRow
 	for rows.Next() {

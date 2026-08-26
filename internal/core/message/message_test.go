@@ -21,7 +21,7 @@ func newTestService(t *testing.T) (*Service, *sqlite.DB, int64, int64) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	accountID, err := db.UpsertAccount(ctx, "work", "me@example.com", "Work")
 	if err != nil {

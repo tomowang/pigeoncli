@@ -47,16 +47,16 @@ func dialAuthenticated(ctx context.Context, opts DialOptions, provider auth.Prov
 		return nil, fmt.Errorf("dial %s: %w", opts.addr(), err)
 	}
 	if err := c.WaitGreeting(); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("greeting: %w", err)
 	}
 	saslClient, err := provider.IMAPSASLClient(ctx)
 	if err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 	if err := c.Authenticate(saslClient); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("authenticate: %w", err)
 	}
 	return c, nil
@@ -71,7 +71,7 @@ func (cl *Client) WatchContext(ctx context.Context) (stop func()) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			cl.c.Close()
+			_ = cl.c.Close()
 		case <-done:
 		}
 	}()

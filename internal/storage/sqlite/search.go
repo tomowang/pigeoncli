@@ -38,7 +38,7 @@ func (db *DB) SearchMessages(ctx context.Context, accountID int64, query string,
 	if err != nil {
 		return nil, fmt.Errorf("search messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []SearchResultRow
 	for rows.Next() {

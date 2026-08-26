@@ -276,7 +276,7 @@ func (s *Service) fetchRaw(ctx context.Context, cfg config.Account, folderPath s
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
-	defer cl.Close()
+	defer func() { _ = cl.Close() }()
 	defer cl.WatchContext(ctx)()
 
 	if _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {

@@ -101,7 +101,7 @@ func (db *DB) ListSignatures(ctx context.Context, accountSlug string) ([]Signatu
 	if err != nil {
 		return nil, fmt.Errorf("list signatures: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignatureRows(rows)
 }
 
@@ -115,7 +115,7 @@ func (db *DB) ListAllSignatures(ctx context.Context) ([]SignatureRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list all signatures: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignatureRows(rows)
 }
 

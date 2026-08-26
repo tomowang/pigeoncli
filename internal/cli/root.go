@@ -43,7 +43,7 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			blobs, err := newBlobStore()
 			if err != nil {

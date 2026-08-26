@@ -64,7 +64,7 @@ func newSyncCmd() *cobra.Command {
 					return err
 				}
 				if len(targets) == 0 {
-					fmt.Fprintln(cmd.OutOrStdout(), "No accounts configured. Add one with `pigeon account add`.")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No accounts configured. Add one with `pigeon account add`.")
 					return nil
 				}
 			}
@@ -73,23 +73,22 @@ func newSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-
+			defer func() { _ = db.Close() }()
 			folderSvc := folder.NewService(db)
 
 			for _, a := range targets {
-				fmt.Fprintf(cmd.OutOrStdout(), "Syncing %s...\n", a.Slug)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Syncing %s...\n", a.Slug)
 				ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
 				err := folderSvc.Sync(ctx, a, func(p folder.Progress) {
 					if p.Err != nil {
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s: error: %v\n", p.Path, p.Err)
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: error: %v\n", p.Path, p.Err)
 						return
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s: %d messages (%d unread)\n", p.Path, p.TotalCount, p.UnreadCount)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: %d messages (%d unread)\n", p.Path, p.TotalCount, p.UnreadCount)
 				})
 				cancel()
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "  account error: %v\n", err)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  account error: %v\n", err)
 				}
 			}
 			return nil

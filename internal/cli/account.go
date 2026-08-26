@@ -122,14 +122,14 @@ func newAccountAddCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Account %q added.\n", slug)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Account %q added.\n", slug)
 			return nil
 		},
 	}
 	f.register(cmd, true)
-	cmd.MarkFlagRequired("email")
-	cmd.MarkFlagRequired("imap-host")
-	cmd.MarkFlagRequired("smtp-host")
+	_ = cmd.MarkFlagRequired("email")
+	_ = cmd.MarkFlagRequired("imap-host")
+	_ = cmd.MarkFlagRequired("smtp-host")
 	return cmd
 }
 
@@ -196,7 +196,7 @@ func newAccountEditCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Account %q updated.\n", slug)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Account %q updated.\n", slug)
 			return nil
 		},
 	}
@@ -220,14 +220,14 @@ func newAccountListCmd() *cobra.Command {
 				return err
 			}
 			if len(accounts) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No accounts configured. Add one with `pigeon account add`.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No accounts configured. Add one with `pigeon account add`.")
 				return nil
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			fmt.Fprintln(w, "SLUG\tEMAIL\tIMAP\tSMTP")
+			_, _ = fmt.Fprintln(w, "SLUG\tEMAIL\tIMAP\tSMTP")
 			for _, a := range accounts {
-				fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s:%d (%s)\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s:%d (%s)\n",
 					a.Slug, a.Email, a.IMAP.Host, a.IMAP.Port, a.IMAP.TLS, a.SMTP.Host, a.SMTP.Port, a.SMTP.TLS)
 			}
 			return w.Flush()
@@ -249,7 +249,7 @@ func newAccountRemoveCmd() *cobra.Command {
 			if err := svc.Remove(cmd.Context(), args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Account %q removed.\n", args[0])
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Account %q removed.\n", args[0])
 			return nil
 		},
 	}
@@ -270,7 +270,7 @@ func newAccountTestCmd() *cobra.Command {
 			if err := svc.TestConnection(ctx, args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Account %q: IMAP and SMTP login succeeded.\n", args[0])
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Account %q: IMAP and SMTP login succeeded.\n", args[0])
 			return nil
 		},
 	}

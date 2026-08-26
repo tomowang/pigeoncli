@@ -30,7 +30,7 @@ func readBody(bodyFlag string) (string, error) {
 	if bodyFlag != "" {
 		return bodyFlag, nil
 	}
-	fmt.Fprintln(os.Stderr, "Enter signature body, then press Ctrl+D:")
+	_, _ = fmt.Fprintln(os.Stderr, "Enter signature body, then press Ctrl+D:")
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return "", fmt.Errorf("read signature body: %w", err)
@@ -58,13 +58,12 @@ func newSignatureAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-
+			defer func() { _ = db.Close() }()
 			sig, err := signature.NewService(db).Add(cmd.Context(), account, args[0], text, isDefault)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Signature %q added (id %d).\n", sig.Name, sig.ID)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Signature %q added (id %d).\n", sig.Name, sig.ID)
 			return nil
 		},
 	}
@@ -85,8 +84,7 @@ func newSignatureListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-
+			defer func() { _ = db.Close() }()
 			svc := signature.NewService(db)
 			var sigs []signature.Signature
 			if cmd.Flags().Changed("account") {
@@ -98,12 +96,12 @@ func newSignatureListCmd() *cobra.Command {
 				return err
 			}
 			if len(sigs) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No signatures configured. Add one with `pigeon signature add`.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No signatures configured. Add one with `pigeon signature add`.")
 				return nil
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tACCOUNT\tNAME\tDEFAULT")
+			_, _ = fmt.Fprintln(w, "ID\tACCOUNT\tNAME\tDEFAULT")
 			for _, s := range sigs {
 				scope := s.AccountSlug
 				if scope == "" {
@@ -113,7 +111,7 @@ func newSignatureListCmd() *cobra.Command {
 				if s.IsDefault {
 					def = "*"
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", s.ID, scope, s.Name, def)
+				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", s.ID, scope, s.Name, def)
 			}
 			return w.Flush()
 		},
@@ -141,8 +139,7 @@ func newSignatureEditCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-
+			defer func() { _ = db.Close() }()
 			svc := signature.NewService(db)
 			sigs, err := svc.ListAll(cmd.Context())
 			if err != nil {
@@ -169,7 +166,7 @@ func newSignatureEditCmd() *cobra.Command {
 			if err := svc.Update(cmd.Context(), id, newName, newBody); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Signature %d updated.\n", id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Signature %d updated.\n", id)
 			return nil
 		},
 	}
@@ -194,12 +191,11 @@ func newSignatureRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-
+			defer func() { _ = db.Close() }()
 			if err := signature.NewService(db).Remove(cmd.Context(), id); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Signature %d removed.\n", id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Signature %d removed.\n", id)
 			return nil
 		},
 	}
@@ -220,12 +216,11 @@ func newSignatureSetDefaultCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-
+			defer func() { _ = db.Close() }()
 			if err := signature.NewService(db).SetDefault(cmd.Context(), id); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Signature %d is now the default.\n", id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Signature %d is now the default.\n", id)
 			return nil
 		},
 	}

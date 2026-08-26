@@ -51,13 +51,13 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	sqlDB.SetMaxOpenConns(1)
 
 	if _, err := sqlDB.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	db := &DB{DB: sqlDB}
 	if err := db.migrate(ctx); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, err
 	}
 	return db, nil
@@ -107,11 +107,11 @@ func (db *DB) migrate(ctx context.Context) error {
 			return fmt.Errorf("begin migration %d: %w", version, err)
 		}
 		if _, err := tx.ExecContext(ctx, string(sqlBytes)); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %d (%s): %w", version, name, err)
 		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", version, err)
 		}
 		if err := tx.Commit(); err != nil {

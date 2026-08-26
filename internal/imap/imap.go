@@ -54,7 +54,7 @@ func testLogin(ctx context.Context, opts DialOptions, provider auth.Provider) er
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", opts.addr(), err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if err := c.WaitGreeting(); err != nil {
 		return fmt.Errorf("greeting: %w", err)

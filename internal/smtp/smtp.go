@@ -56,7 +56,7 @@ func testLogin(ctx context.Context, opts DialOptions, provider auth.Provider) er
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", opts.addr(), err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	saslClient, err := provider.SMTPSASLClient(ctx)
 	if err != nil {
@@ -92,7 +92,7 @@ func send(ctx context.Context, opts DialOptions, provider auth.Provider, from st
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", opts.addr(), err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	saslClient, err := provider.SMTPSASLClient(ctx)
 	if err != nil {
