@@ -75,7 +75,7 @@ func (m App) updateSearchResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showSearchResults = false
 				m.selectedFolder = item.FolderPath
 				var cmd tea.Cmd
-				m, cmd = m.setStatus("Loading message...", sevInfo)
+				m, cmd = m.startBusy("Loading message...")
 				return m, tea.Batch(cmd, m.openMessageCmd(item.Message), m.loadMessagesCmd(m.selectedAccount.Slug, item.FolderPath))
 			}
 			return m, nil

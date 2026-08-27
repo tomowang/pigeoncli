@@ -270,7 +270,17 @@ func (s *Service) cachedOrFetchRaw(ctx context.Context, cfg config.Account, fold
 	return raw, nil
 }
 
+// fetchTimeout bounds a single on-demand body fetch (dial + auth + select +
+// fetch). Without it, a stalled connection (dead network, firewall dropping
+// packets silently) leaves the caller — the TUI's "Loading message..."
+// status — waiting indefinitely, since the underlying net.Dial has no
+// deadline of its own.
+const fetchTimeout = 20 * time.Second
+
 func (s *Service) fetchRaw(ctx context.Context, cfg config.Account, folderPath string, uid uint32) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
 	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
 	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
 	if err != nil {

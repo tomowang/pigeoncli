@@ -83,6 +83,12 @@ type App struct {
 	syncSpinner  spinner.Model
 	lastSyncAt   time.Time
 
+	// busy marks a one-off network op (opening a message, jumping to related
+	// messages) as in flight, so the status bar keeps showing a spinner for
+	// it instead of the status text auto-clearing after a few seconds while
+	// the fetch is still running — see startBusy/stopBusy.
+	busy bool
+
 	accounts list.Model
 	folders  list.Model
 	messages list.Model
@@ -334,6 +340,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case messageBodyLoadedMsg:
+		m = m.stopBusy()
 		if msg.err != nil {
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("open message: %v", msg.err), sevError)
@@ -402,9 +409,10 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case spinner.TickMsg:
-		if m.syncCh == nil {
-			// Sync already finished; drop the tick instead of rescheduling
-			// so the spinner doesn't keep ticking in the background forever.
+		if m.syncCh == nil && !m.busy {
+			// Sync/busy op already finished; drop the tick instead of
+			// rescheduling so the spinner doesn't keep ticking in the
+			// background forever.
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -453,6 +461,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case relatedLoadedMsg:
+		m = m.stopBusy()
 		if msg.err != nil {
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("related messages: %v", msg.err), sevError)
@@ -639,7 +648,7 @@ func (m App) openSelection() (tea.Model, tea.Cmd) {
 	case focusMessages:
 		if item, ok := m.messages.SelectedItem().(messageItem); ok {
 			var cmd tea.Cmd
-			m, cmd = m.setStatus("Loading message...", sevInfo)
+			m, cmd = m.startBusy("Loading message...")
 			return m, tea.Batch(cmd, m.openMessageCmd(message.Message(item)))
 		}
 	}
@@ -675,7 +684,7 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var cmd tea.Cmd
-		m, cmd = m.setStatus("Loading related messages...", sevInfo)
+		m, cmd = m.startBusy("Loading related messages...")
 		return m, tea.Batch(cmd, m.relatedCmd(*m.viewingMsg))
 	case "a":
 		switch len(m.viewBody.Attachments) {
@@ -872,10 +881,15 @@ func (m App) shortcutsLine() string {
 // a sync is running), or — once idle with nothing to report — when the last
 // sync finished. Blank only if neither has ever happened yet.
 func (m App) statusBarText() (text string, sev severity) {
-	if m.syncCh != nil {
+	if m.syncCh != nil || m.busy {
 		msg := m.status.text
 		if msg == "" {
-			msg = "Syncing…"
+			switch {
+			case m.syncCh != nil:
+				msg = "Syncing…"
+			default:
+				msg = "Working…"
+			}
 		}
 		return m.syncSpinner.View() + " " + msg, sevInfo
 	}

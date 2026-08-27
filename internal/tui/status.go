@@ -58,6 +58,32 @@ func (m App) setStatus(text string, sev severity) (App, tea.Cmd) {
 	})
 }
 
+// startBusy marks a one-off network op as in flight and sets text as the
+// status, like setStatus, but — unlike a plain info status — the spinner it
+// starts keeps the status bar showing text until stopBusy is called, even
+// past setStatus's 4-second auto-clear. Use this instead of setStatus for
+// ops (opening a message, jumping to related messages) whose duration
+// depends on network/server latency and so can plausibly outlast 4 seconds;
+// otherwise the status bar goes blank while the op is still running and the
+// UI looks stuck. Pair with tea.Batch(cmd, <the op's tea.Cmd>).
+func (m App) startBusy(text string) (App, tea.Cmd) {
+	spinnerAlreadyTicking := m.syncCh != nil || m.busy
+	m.busy = true
+	m, cmd := m.setStatus(text, sevInfo)
+	if spinnerAlreadyTicking {
+		return m, cmd
+	}
+	return m, tea.Batch(cmd, m.syncSpinner.Tick)
+}
+
+// stopBusy ends the in-flight marker set by startBusy. Call it from the
+// message handler that receives the op's result, on every branch (success,
+// empty, and error alike).
+func (m App) stopBusy() App {
+	m.busy = false
+	return m
+}
+
 // clearStatus resets the status bar to its zero value (footer() then renders
 // it as a blank row above the shortcuts line) without touching history —
 // this isn't a message worth logging, just "nothing pending anymore".
