@@ -13,27 +13,67 @@ var blockTags = map[string]bool{
 
 // stripHTML extracts a plaintext approximation of an HTML document: text
 // content only, with newlines inserted at block-level boundaries and
-// <script>/<style> contents dropped entirely.
+// <script>/<style> contents dropped entirely. <a href> targets are preserved
+// alongside their link text (e.g. "Click here (https://example.com)") so
+// links aren't silently lost when the visible text doesn't already show the
+// URL — that URL is what lets the TUI render the link as clickable.
 func stripHTML(s string) string {
 	z := html.NewTokenizer(strings.NewReader(s))
 	var sb strings.Builder
 	skipDepth := 0 // >0 while inside <script> or <style>
 
+	var linkHref string
+	var linkText strings.Builder
+	inLink := false
+
+	flushLink := func() {
+		text := strings.TrimSpace(linkText.String())
+		switch {
+		case text == "":
+			sb.WriteString(linkHref)
+		case strings.EqualFold(text, linkHref):
+			sb.WriteString(text)
+		default:
+			sb.WriteString(text)
+			sb.WriteString(" (")
+			sb.WriteString(linkHref)
+			sb.WriteString(")")
+		}
+		linkText.Reset()
+		linkHref = ""
+		inLink = false
+	}
+
 	for {
 		switch z.Next() {
 		case html.ErrorToken:
+			if inLink {
+				flushLink()
+			}
 			return collapseBlankLines(sb.String())
 
 		case html.TextToken:
 			if skipDepth == 0 {
-				sb.Write(z.Text())
+				if inLink {
+					linkText.Write(z.Text())
+				} else {
+					sb.Write(z.Text())
+				}
 			}
 
 		case html.StartTagToken:
-			name, _ := z.TagName()
+			name, hasAttr := z.TagName()
 			switch string(name) {
 			case "script", "style":
 				skipDepth++
+			case "a":
+				if inLink {
+					flushLink() // malformed nested <a>: flush the outer one first
+				}
+				if href := tagAttr(z, hasAttr, "href"); href != "" {
+					inLink = true
+					linkHref = href
+				}
 			default:
 				if blockTags[string(name)] {
 					sb.WriteByte('\n')
@@ -48,11 +88,32 @@ func stripHTML(s string) string {
 
 		case html.EndTagToken:
 			name, _ := z.TagName()
-			if (string(name) == "script" || string(name) == "style") && skipDepth > 0 {
-				skipDepth--
+			switch string(name) {
+			case "script", "style":
+				if skipDepth > 0 {
+					skipDepth--
+				}
+			case "a":
+				if inLink {
+					flushLink()
+				}
 			}
 		}
 	}
+}
+
+// tagAttr reads attrKey's value off the tokenizer's current start tag, if
+// present. Must be called immediately after TagName() for that tag, before
+// any further Next() call advances the tokenizer.
+func tagAttr(z *html.Tokenizer, hasAttr bool, attrKey string) string {
+	for hasAttr {
+		var key, val []byte
+		key, val, hasAttr = z.TagAttr()
+		if string(key) == attrKey {
+			return string(val)
+		}
+	}
+	return ""
 }
 
 // collapseBlankLines trims each line and collapses runs of blank lines

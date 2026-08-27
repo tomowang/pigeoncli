@@ -42,6 +42,30 @@ func TestPlainTextFallsBackToHTML(t *testing.T) {
 	}
 }
 
+func TestPlainTextPreservesLinkHref(t *testing.T) {
+	raw := "From: a@example.com\r\n" +
+		"To: b@example.com\r\n" +
+		"Subject: Hi\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"\r\n" +
+		"<p>Please <a href=\"https://example.com/reset\">click here</a> to reset your password.</p>\r\n" +
+		"<p><a href=\"https://example.com/plain\">https://example.com/plain</a></p>\r\n"
+
+	got, err := PlainText([]byte(raw))
+	if err != nil {
+		t.Fatalf("PlainText: %v", err)
+	}
+	if !strings.Contains(got, "click here (https://example.com/reset)") {
+		t.Fatalf("expected link text plus href, got %q", got)
+	}
+	if strings.Contains(got, "https://example.com/plain (https://example.com/plain)") {
+		t.Fatalf("expected href not duplicated when link text is already the URL, got %q", got)
+	}
+	if !strings.Contains(got, "https://example.com/plain") {
+		t.Fatalf("expected autolinked URL preserved, got %q", got)
+	}
+}
+
 func TestPlainTextPrefersPlainOverHTMLInMultipart(t *testing.T) {
 	raw := "From: a@example.com\r\n" +
 		"To: b@example.com\r\n" +

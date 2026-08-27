@@ -342,7 +342,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewingMsg = &msg.msg
 		m.viewBody = msg.body
 		m.viewingRaw = false
-		m.viewport.SetContent(msg.body.PlainText)
+		m.viewport.SetContent(hyperlinkify(msg.body.PlainText, m.theme.Link))
 		m.viewport.GotoTop()
 		m.layout() // viewport height depends on whether this message has an attachments line
 		m = m.clearStatus()
@@ -662,7 +662,7 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.viewingRaw {
 			m.viewport.SetContent(string(m.viewBody.Raw))
 		} else {
-			m.viewport.SetContent(m.viewBody.PlainText)
+			m.viewport.SetContent(hyperlinkify(m.viewBody.PlainText, m.theme.Link))
 		}
 		m.viewport.GotoTop()
 		return m, nil

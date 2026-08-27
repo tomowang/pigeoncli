@@ -19,6 +19,7 @@ type Theme struct {
 	Card       lipgloss.Style
 	CardHeader lipgloss.Style
 	CardMeta   lipgloss.Style
+	Link       lipgloss.Style // clickable URLs in the message preview
 }
 
 // StatusStyle returns the status-bar style for sev.
@@ -51,6 +52,7 @@ var themes = map[string]Theme{
 		Card:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(0, 1),
 		CardHeader: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
 		CardMeta:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
+		Link:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true),
 	},
 	"dark": {
 		Name: "dark",
@@ -69,6 +71,7 @@ var themes = map[string]Theme{
 		Card:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("135")).Padding(0, 1),
 		CardHeader: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")),
 		CardMeta:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		Link:       lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Underline(true),
 	},
 	"light": {
 		Name: "light",
@@ -87,6 +90,7 @@ var themes = map[string]Theme{
 		Card:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("25")).Padding(0, 1),
 		CardHeader: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")),
 		CardMeta:   lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		Link:       lipgloss.NewStyle().Foreground(lipgloss.Color("27")).Underline(true),
 	},
 }
 
