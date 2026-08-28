@@ -45,8 +45,12 @@ func TestAccountFolderMessageLifecycle(t *testing.T) {
 		t.Fatalf("UpsertMessageHeaders: %v", err)
 	}
 
-	if err := db.UpdateFolderSyncState(ctx, folderID, 100, 3); err != nil {
+	total, unread, err := db.UpdateFolderSyncState(ctx, folderID, 100, 3, 5)
+	if err != nil {
 		t.Fatalf("UpdateFolderSyncState: %v", err)
+	}
+	if total != 2 || unread != 1 {
+		t.Fatalf("expected UpdateFolderSyncState to return total=2 unread=1, got total=%d unread=%d", total, unread)
 	}
 
 	folders, err := db.ListFolders(ctx, accountID)
@@ -60,7 +64,7 @@ func TestAccountFolderMessageLifecycle(t *testing.T) {
 	if f.TotalCount != 2 || f.UnreadCount != 1 {
 		t.Fatalf("expected total=2 unread=1, got total=%d unread=%d", f.TotalCount, f.UnreadCount)
 	}
-	if f.UIDValidity != 100 || f.UIDNext != 3 {
+	if f.UIDValidity != 100 || f.UIDNext != 3 || f.ModSeq != 5 {
 		t.Fatalf("unexpected sync state: %+v", f)
 	}
 
@@ -68,7 +72,7 @@ func TestAccountFolderMessageLifecycle(t *testing.T) {
 	if err := db.DeleteMessagesNotIn(ctx, folderID, []uint32{2}); err != nil {
 		t.Fatalf("DeleteMessagesNotIn: %v", err)
 	}
-	if err := db.UpdateFolderSyncState(ctx, folderID, 100, 3); err != nil {
+	if _, _, err := db.UpdateFolderSyncState(ctx, folderID, 100, 3, 5); err != nil {
 		t.Fatalf("UpdateFolderSyncState after delete: %v", err)
 	}
 	folders, err = db.ListFolders(ctx, accountID)
@@ -82,7 +86,7 @@ func TestAccountFolderMessageLifecycle(t *testing.T) {
 	if err := db.ClearFolderMessages(ctx, folderID); err != nil {
 		t.Fatalf("ClearFolderMessages: %v", err)
 	}
-	if err := db.UpdateFolderSyncState(ctx, folderID, 100, 3); err != nil {
+	if _, _, err := db.UpdateFolderSyncState(ctx, folderID, 100, 3, 5); err != nil {
 		t.Fatalf("UpdateFolderSyncState after clear: %v", err)
 	}
 	folders, err = db.ListFolders(ctx, accountID)

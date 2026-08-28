@@ -289,7 +289,7 @@ func (s *Service) fetchRaw(ctx context.Context, cfg config.Account, folderPath s
 	defer func() { _ = cl.Close() }()
 	defer cl.WatchContext(ctx)()
 
-	if _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
+	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
 		return nil, fmt.Errorf("select %q: %w", folderPath, err)
 	}
 	raw, err := cl.FetchRawBody(ctx, uid)

@@ -120,13 +120,18 @@ func (cl *Client) ListFolders(ctx context.Context) ([]Folder, error) {
 }
 
 // SelectFolder selects a mailbox and returns its current UIDVALIDITY,
-// UIDNEXT, and message count.
-func (cl *Client) SelectFolder(ctx context.Context, path string) (uidValidity, uidNext, numMessages uint32, err error) {
-	data, err := cl.c.Select(path, nil).Wait()
+// UIDNEXT, message count, and (if the server supports RFC 7162 CONDSTORE)
+// its HIGHESTMODSEQ. highestModSeq is 0 if the server — or this specific
+// mailbox, per RFC 7162 — doesn't support persistent mod-sequences; callers
+// must treat 0 as "no CONDSTORE baseline available" rather than a real
+// mod-sequence.
+func (cl *Client) SelectFolder(ctx context.Context, path string) (uidValidity, uidNext, numMessages uint32, highestModSeq uint64, err error) {
+	opts := &imap.SelectOptions{CondStore: cl.c.Caps().Has(imap.CapCondStore)}
+	data, err := cl.c.Select(path, opts).Wait()
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("select %q: %w", path, err)
+		return 0, 0, 0, 0, fmt.Errorf("select %q: %w", path, err)
 	}
-	return data.UIDValidity, uint32(data.UIDNext), data.NumMessages, nil
+	return data.UIDValidity, uint32(data.UIDNext), data.NumMessages, data.HighestModSeq, nil
 }
 
 // MessageHeader is a message's header fields as fetched from IMAP.
@@ -169,6 +174,58 @@ func (cl *Client) FetchUIDsAndFlags(ctx context.Context) (map[uint32][]string, e
 			flags[i] = string(f)
 		}
 		out[uint32(b.UID)] = flags
+	}
+	return out, nil
+}
+
+// FetchChangedUIDsAndFlags fetches UID+flags only for messages whose
+// MODSEQ has changed since sinceModSeq (RFC 7162 CONDSTORE) — this covers
+// both new messages and flag changes, in a response that's typically far
+// smaller than FetchUIDsAndFlags's whole-folder listing. Callers must only
+// use sinceModSeq values obtained from a prior SelectFolder on this same
+// mailbox/UIDVALIDITY; the server rejects an unknown/stale mod-sequence.
+//
+// CHANGEDSINCE alone doesn't report expunges (that needs QRESYNC's
+// VANISHED response, which this library doesn't implement), so deletion
+// reconciliation still needs ListUIDs.
+func (cl *Client) FetchChangedUIDsAndFlags(ctx context.Context, sinceModSeq uint64) (map[uint32][]string, error) {
+	var uidSet imap.UIDSet
+	uidSet.AddRange(1, 0) // "1:*"
+
+	bufs, err := cl.c.Fetch(uidSet, &imap.FetchOptions{
+		UID:          true,
+		Flags:        true,
+		ChangedSince: sinceModSeq,
+	}).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("fetch changed uids/flags: %w", err)
+	}
+
+	out := make(map[uint32][]string, len(bufs))
+	for _, b := range bufs {
+		flags := make([]string, len(b.Flags))
+		for i, f := range b.Flags {
+			flags[i] = string(f)
+		}
+		out[uint32(b.UID)] = flags
+	}
+	return out, nil
+}
+
+// ListUIDs returns every UID currently present in the selected mailbox, via
+// UID SEARCH ALL — a single compact response (IMAP UID sets compress into
+// ranges) rather than one line per message. Used for deletion
+// reconciliation, including alongside the CONDSTORE fast path above, since
+// CHANGEDSINCE never reports expunged messages.
+func (cl *Client) ListUIDs(ctx context.Context) ([]uint32, error) {
+	data, err := cl.c.UIDSearch(&imap.SearchCriteria{}, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("search all uids: %w", err)
+	}
+	uids := data.AllUIDs()
+	out := make([]uint32, len(uids))
+	for i, u := range uids {
+		out[i] = uint32(u)
 	}
 	return out, nil
 }

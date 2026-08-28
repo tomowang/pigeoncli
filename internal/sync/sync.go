@@ -57,14 +57,14 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 	if err != nil {
 		return fmt.Errorf("load existing folder state: %w", err)
 	}
-	priorUIDValidity := make(map[string]uint32, len(existing))
+	priorByPath := make(map[string]sqlite.FolderRow, len(existing))
 	for _, f := range existing {
-		priorUIDValidity[f.Path] = f.UIDValidity
+		priorByPath[f.Path] = f
 	}
 
 	for _, rf := range remoteFolders {
 		result := FolderProgress{Path: rf.Path}
-		total, unread, err := syncFolder(ctx, db, cl, accountID, rf, priorUIDValidity[rf.Path])
+		total, unread, err := syncFolder(ctx, db, cl, accountID, rf, priorByPath[rf.Path])
 		if err != nil {
 			result.Err = fmt.Errorf("sync %q: %w", rf.Path, err)
 		} else {
@@ -79,7 +79,7 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 	return db.SetAccountSyncedNow(ctx, accountID)
 }
 
-func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID int64, rf imap.Folder, priorUIDValidity uint32) (total, unread int, err error) {
+func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID int64, rf imap.Folder, prior sqlite.FolderRow) (total, unread int, err error) {
 	name := rf.Path
 	if rf.Delim != "" {
 		if idx := strings.LastIndex(rf.Path, rf.Delim); idx >= 0 {
@@ -92,22 +92,32 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 		return 0, 0, fmt.Errorf("upsert folder: %w", err)
 	}
 
-	uidValidity, uidNext, _, err := cl.SelectFolder(ctx, rf.Path)
+	uidValidity, uidNext, _, highestModSeq, err := cl.SelectFolder(ctx, rf.Path)
 	if err != nil {
 		return 0, 0, fmt.Errorf("select: %w", err)
 	}
 
-	if priorUIDValidity != 0 && priorUIDValidity != uidValidity {
+	uidValidityChanged := prior.UIDValidity != 0 && prior.UIDValidity != uidValidity
+	if uidValidityChanged {
 		if err := db.ClearFolderMessages(ctx, folderID); err != nil {
 			return 0, 0, fmt.Errorf("clear stale cache after uidvalidity change: %w", err)
 		}
 	}
 
-	// Cheap first pass: just UIDs and flags for the whole folder. Diffed
-	// against what's already cached, this tells us which UIDs are new
-	// (need a full envelope fetch) vs. already known (headers are
-	// immutable per UID, so only a changed flag set needs writing back).
-	remoteFlags, err := cl.FetchUIDsAndFlags(ctx)
+	// CONDSTORE fast path: ask the server for only what changed since our
+	// last-recorded HIGHESTMODSEQ, instead of every UID+flags in the
+	// folder. Requires the server to have handed back a usable baseline
+	// last time (prior.ModSeq != 0), CONDSTORE still negotiated this
+	// session (highestModSeq != 0), and no UIDVALIDITY reset just now —
+	// otherwise fall back to the full listing.
+	useCondStore := prior.ModSeq != 0 && highestModSeq != 0 && !uidValidityChanged
+
+	var changedFlags map[uint32][]string
+	if useCondStore {
+		changedFlags, err = cl.FetchChangedUIDsAndFlags(ctx, prior.ModSeq)
+	} else {
+		changedFlags, err = cl.FetchUIDsAndFlags(ctx)
+	}
 	if err != nil {
 		return 0, 0, fmt.Errorf("fetch uids/flags: %w", err)
 	}
@@ -118,7 +128,7 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 
 	var newUIDs []uint32
 	flagUpdates := make(map[uint32][]string)
-	for uid, flags := range remoteFlags {
+	for uid, flags := range changedFlags {
 		if lf, ok := localFlags[uid]; ok {
 			if !flagsEqual(lf, flags) {
 				flagUpdates[uid] = flags
@@ -150,23 +160,30 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 		return 0, 0, fmt.Errorf("update flags: %w", err)
 	}
 
-	remoteUIDs := make([]uint32, 0, len(remoteFlags))
-	for uid, flags := range remoteFlags {
-		remoteUIDs = append(remoteUIDs, uid)
-		if !seen(flags) {
-			unread++
+	// CHANGEDSINCE never reports expunges (that needs QRESYNC's VANISHED
+	// response, which isn't available here — see ListUIDs), so deletion
+	// reconciliation always needs the full live-UID set. Under the
+	// CONDSTORE path that means one extra round trip, but UID SEARCH ALL's
+	// response is a handful of compressed ranges, not one line per
+	// message, so it stays cheap even for large folders.
+	var remoteUIDs []uint32
+	if useCondStore {
+		remoteUIDs, err = cl.ListUIDs(ctx)
+		if err != nil {
+			return 0, 0, fmt.Errorf("list uids: %w", err)
+		}
+	} else {
+		remoteUIDs = make([]uint32, 0, len(changedFlags))
+		for uid := range changedFlags {
+			remoteUIDs = append(remoteUIDs, uid)
 		}
 	}
-	total = len(remoteFlags)
 
 	if err := db.DeleteMessagesNotIn(ctx, folderID, remoteUIDs); err != nil {
 		return 0, 0, fmt.Errorf("reconcile deletions: %w", err)
 	}
-	if err := db.UpdateFolderSyncState(ctx, folderID, uidValidity, uidNext); err != nil {
-		return 0, 0, fmt.Errorf("update sync state: %w", err)
-	}
 
-	return total, unread, nil
+	return db.UpdateFolderSyncState(ctx, folderID, uidValidity, uidNext, highestModSeq)
 }
 
 // flagsEqual reports whether a and b contain the same flags, ignoring
@@ -185,13 +202,4 @@ func flagsEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func seen(flags []string) bool {
-	for _, f := range flags {
-		if f == `\Seen` {
-			return true
-		}
-	}
-	return false
 }
