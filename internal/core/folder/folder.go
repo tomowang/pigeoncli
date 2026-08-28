@@ -74,3 +74,17 @@ func (s *Service) Sync(ctx context.Context, cfg config.Account, windowCount int,
 	}
 	return sync.SyncAccount(ctx, s.db, a, onProgress)
 }
+
+// Watch opens a dedicated IMAP IDLE connection to cfg's server for
+// folderPath and blocks until ctx is canceled, calling onUpdate (from a
+// background goroutine — see sync.WatchFolder) whenever the server
+// reports an unsolicited change to that folder. It never touches the
+// local cache itself; callers should trigger a Sync in response to
+// onUpdate. A nil error means ctx was canceled normally; any other error
+// means live updates were lost (e.g. the server doesn't support IDLE, or
+// the connection dropped) and callers should fall back to polling rather
+// than retrying immediately.
+func (s *Service) Watch(ctx context.Context, cfg config.Account, folderPath string, onUpdate func()) error {
+	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	return sync.WatchFolder(ctx, cfg.IMAP, provider, folderPath, onUpdate)
+}

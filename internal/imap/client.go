@@ -21,13 +21,24 @@ type Client struct {
 
 // DialClient connects to the IMAP server and authenticates using provider.
 func DialClient(ctx context.Context, opts DialOptions, provider auth.Provider) (*Client, error) {
+	return DialClientWithUpdates(ctx, opts, provider, nil)
+}
+
+// DialClientWithUpdates is like DialClient, but additionally invokes
+// onMailboxUpdate (from the client's background read-loop goroutine —
+// callers must not touch non-thread-safe state directly from it) whenever
+// the server reports an unsolicited update to the selected mailbox, such
+// as new mail or a flag/expunge change while an Idle() command is
+// running. Regular sync/fetch connections have no need for this and pass
+// a nil onMailboxUpdate (equivalent to DialClient).
+func DialClientWithUpdates(ctx context.Context, opts DialOptions, provider auth.Provider, onMailboxUpdate func()) (*Client, error) {
 	type result struct {
 		c   *imapclient.Client
 		err error
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		c, err := dialAuthenticated(ctx, opts, provider)
+		c, err := dialAuthenticated(ctx, opts, provider, onMailboxUpdate)
 		resCh <- result{c, err}
 	}()
 	select {
@@ -41,8 +52,16 @@ func DialClient(ctx context.Context, opts DialOptions, provider auth.Provider) (
 	}
 }
 
-func dialAuthenticated(ctx context.Context, opts DialOptions, provider auth.Provider) (*imapclient.Client, error) {
-	c, err := dial(opts)
+func dialAuthenticated(ctx context.Context, opts DialOptions, provider auth.Provider, onMailboxUpdate func()) (*imapclient.Client, error) {
+	var clientOpts *imapclient.Options
+	if onMailboxUpdate != nil {
+		clientOpts = &imapclient.Options{
+			UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+				Mailbox: func(*imapclient.UnilateralDataMailbox) { onMailboxUpdate() },
+			},
+		}
+	}
+	c, err := dial(opts, clientOpts)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", opts.addr(), err)
 	}
@@ -132,6 +151,26 @@ func (cl *Client) SelectFolder(ctx context.Context, path string) (uidValidity, u
 		return 0, 0, 0, 0, fmt.Errorf("select %q: %w", path, err)
 	}
 	return data.UIDValidity, uint32(data.UIDNext), data.NumMessages, data.HighestModSeq, nil
+}
+
+// SupportsIdle reports whether the server advertises RFC 2177 IDLE.
+func (cl *Client) SupportsIdle() bool {
+	return cl.c.Caps().Has(imap.CapIdle)
+}
+
+// Idle sends an IDLE command and blocks until the connection ends — e.g.
+// via WatchContext closing it when the caller's context is canceled, or a
+// server/network error. While idling, the server's unsolicited updates
+// (new mail, flag/expunge changes) are delivered via the handler
+// registered when this Client was dialed — see DialClientWithUpdates.
+// go-imap automatically restarts the underlying IDLE command every ~28
+// minutes to avoid inactivity timeouts (RFC 2177).
+func (cl *Client) Idle() error {
+	cmd, err := cl.c.Idle()
+	if err != nil {
+		return fmt.Errorf("idle: %w", err)
+	}
+	return cmd.Wait()
 }
 
 // MessageHeader is a message's header fields as fetched from IMAP.

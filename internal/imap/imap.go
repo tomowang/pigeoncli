@@ -23,14 +23,14 @@ func (o DialOptions) addr() string {
 	return net.JoinHostPort(o.Host, strconv.Itoa(o.Port))
 }
 
-func dial(o DialOptions) (*imapclient.Client, error) {
+func dial(o DialOptions, opts *imapclient.Options) (*imapclient.Client, error) {
 	switch o.TLS {
 	case config.TLSModeTLS:
-		return imapclient.DialTLS(o.addr(), nil)
+		return imapclient.DialTLS(o.addr(), opts)
 	case config.TLSModeSTARTTLS:
-		return imapclient.DialStartTLS(o.addr(), nil)
+		return imapclient.DialStartTLS(o.addr(), opts)
 	default:
-		return imapclient.DialInsecure(o.addr(), nil)
+		return imapclient.DialInsecure(o.addr(), opts)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestLogin(ctx context.Context, opts DialOptions, provider auth.Provider) er
 }
 
 func testLogin(ctx context.Context, opts DialOptions, provider auth.Provider) error {
-	c, err := dial(opts)
+	c, err := dial(opts, nil)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", opts.addr(), err)
 	}

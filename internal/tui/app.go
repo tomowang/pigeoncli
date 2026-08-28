@@ -84,6 +84,17 @@ type App struct {
 	syncSpinner       spinner.Model
 	lastSyncAt        time.Time
 
+	// idle* track the IMAP IDLE watcher for the currently selected
+	// account/folder, which pushes idleUpdateMsg to trigger an early sync
+	// instead of waiting for the next syncTickMsg. idleCancel stops the
+	// watcher (e.g. when the selection changes); idleAccount/idleFolder
+	// record what it's currently watching, so a stray idleStoppedMsg from
+	// a superseded watcher can be told apart from a real failure.
+	idleCh      chan struct{}
+	idleCancel  context.CancelFunc
+	idleAccount string
+	idleFolder  string
+
 	// busy marks a one-off network op (opening a message, jumping to related
 	// messages) as in flight, so the status bar keeps showing a spinner for
 	// it instead of the status text auto-clearing after a few seconds while
@@ -339,6 +350,35 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = messageItem(mm)
 		}
 		m.messages.SetItems(items)
+		var idleCmd tea.Cmd
+		m, idleCmd = m.restartIdleCmd(m.selectedAccount, msg.folderPath)
+		return m, idleCmd
+
+	case idleUpdateMsg:
+		cmds := []tea.Cmd{listenIdleCmd(m.idleCh)}
+		if m.syncCh == nil && m.selectedAccount.Slug != "" {
+			ch := make(chan folder.Progress)
+			m.syncCh = ch
+			var statusCmd tea.Cmd
+			m, statusCmd = m.setStatus("Change detected, syncing…", sevInfo)
+			cmds = append(cmds, statusCmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch), m.syncSpinner.Tick)
+		}
+		return m, tea.Batch(cmds...)
+
+	case idleStoppedMsg:
+		// A watcher stopping because it was superseded (account/folder
+		// switch already replaced it) is expected and silent; only
+		// surface it when it's still the one currently in effect.
+		if msg.accountSlug != m.idleAccount || msg.folderPath != m.idleFolder {
+			return m, nil
+		}
+		m.idleCancel = nil
+		m.idleCh = nil
+		if msg.err != nil {
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("live updates unavailable for %s: %v", msg.folderPath, msg.err), sevInfo)
+			return m, cmd
+		}
 		return m, nil
 
 	case messageBodyLoadedMsg:
