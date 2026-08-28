@@ -29,6 +29,11 @@ type Account struct {
 	DisplayName string
 	IMAP        config.ServerConfig
 	Provider    auth.Provider
+	// WindowCount caps how many of a folder's most recent messages get
+	// fully synced the first time that folder is synced (or resynced
+	// after a UIDVALIDITY change); 0 disables windowing and syncs full
+	// history, as before this field existed.
+	WindowCount int
 }
 
 // SyncAccount connects to a's IMAP server, lists its folders, and syncs
@@ -64,7 +69,7 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 
 	for _, rf := range remoteFolders {
 		result := FolderProgress{Path: rf.Path}
-		total, unread, err := syncFolder(ctx, db, cl, accountID, rf, priorByPath[rf.Path])
+		total, unread, err := syncFolder(ctx, db, cl, accountID, rf, priorByPath[rf.Path], a.WindowCount)
 		if err != nil {
 			result.Err = fmt.Errorf("sync %q: %w", rf.Path, err)
 		} else {
@@ -79,7 +84,7 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 	return db.SetAccountSyncedNow(ctx, accountID)
 }
 
-func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID int64, rf imap.Folder, prior sqlite.FolderRow) (total, unread int, err error) {
+func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID int64, rf imap.Folder, prior sqlite.FolderRow, windowCount int) (total, unread int, err error) {
 	name := rf.Path
 	if rf.Delim != "" {
 		if idx := strings.LastIndex(rf.Path, rf.Delim); idx >= 0 {
@@ -126,6 +131,23 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 		return 0, 0, fmt.Errorf("load cached flags: %w", err)
 	}
 
+	// The local cache starts empty either on this folder's very first
+	// sync, or right after a UIDVALIDITY reset just cleared it above. In
+	// both cases any sync-horizon carried over from prior is meaningless
+	// (a UIDVALIDITY change renumbers UIDs entirely), so it's recomputed
+	// from scratch: windowCount>0 caps this sync to the most recent
+	// windowCount messages, 0 disables windowing (syncs everything, the
+	// pre-windowing behavior). A folder that's already been synced keeps
+	// whatever horizon it committed to previously, regardless of the
+	// current windowCount setting.
+	horizon := prior.SyncHorizonUID
+	if freshCache := prior.UIDValidity == 0 || uidValidityChanged; freshCache {
+		horizon = 0
+		if windowCount > 0 {
+			horizon = windowHorizon(changedFlags, windowCount)
+		}
+	}
+
 	var newUIDs []uint32
 	flagUpdates := make(map[uint32][]string)
 	for uid, flags := range changedFlags {
@@ -133,9 +155,13 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 			if !flagsEqual(lf, flags) {
 				flagUpdates[uid] = flags
 			}
-		} else {
+		} else if horizon == 0 || uid >= horizon {
 			newUIDs = append(newUIDs, uid)
 		}
+		// else: below the sync horizon — intentionally left uncached
+		// until a future "load more" widens the window. Without this
+		// check, every subsequent sync would treat these old UIDs as
+		// "new" forever, since they're never added to the local cache.
 	}
 
 	if len(newUIDs) > 0 {
@@ -183,7 +209,25 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 		return 0, 0, fmt.Errorf("reconcile deletions: %w", err)
 	}
 
-	return db.UpdateFolderSyncState(ctx, folderID, uidValidity, uidNext, highestModSeq)
+	return db.UpdateFolderSyncState(ctx, folderID, uidValidity, uidNext, highestModSeq, horizon)
+}
+
+// windowHorizon returns the UID cutoff that keeps only the count most
+// recent messages in remote — UID order is monotonic per RFC 3501 and
+// used here as a recency proxy, avoiding a separate date-based IMAP
+// search. Messages with UID below the returned value are left out of the
+// sync. 0 means no cutoff: remote has count or fewer messages, so there's
+// nothing to window.
+func windowHorizon(remote map[uint32][]string, count int) uint32 {
+	if len(remote) <= count {
+		return 0
+	}
+	uids := make([]uint32, 0, len(remote))
+	for uid := range remote {
+		uids = append(uids, uid)
+	}
+	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
+	return uids[count-1]
 }
 
 // flagsEqual reports whether a and b contain the same flags, ignoring

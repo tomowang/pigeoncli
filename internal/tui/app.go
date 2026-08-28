@@ -78,10 +78,11 @@ type App struct {
 	quitting      bool
 	lastCtrlC     time.Time
 
-	syncCh       chan folder.Progress
-	syncInterval time.Duration
-	syncSpinner  spinner.Model
-	lastSyncAt   time.Time
+	syncCh            chan folder.Progress
+	syncInterval      time.Duration
+	initialSyncWindow int
+	syncSpinner       spinner.Model
+	lastSyncAt        time.Time
 
 	// busy marks a one-off network op (opening a message, jumping to related
 	// messages) as in flight, so the status bar keeps showing a spinner for
@@ -179,6 +180,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		attachmentPicker:  attachmentPicker,
 		viewport:          viewport.New(0, 0),
 		syncInterval:      defaultSyncInterval,
+		initialSyncWindow: defaultInitialSyncWindow,
 		syncSpinner:       syncSpinner,
 	}
 }
@@ -388,6 +390,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.settings.SyncInterval > 0 {
 			m.syncInterval = msg.settings.SyncInterval
 		}
+		m.initialSyncWindow = msg.settings.InitialSyncWindow
 		theme, ok := themeByName(msg.settings.Theme)
 		m.theme = theme
 		if !ok {

@@ -18,8 +18,12 @@ type FolderRow struct {
 	UIDValidity uint32
 	UIDNext     uint32
 	ModSeq      uint64
-	UnreadCount int
-	TotalCount  int
+	// SyncHorizonUID is the oldest UID this folder has committed to
+	// keeping synced, once an initial-sync window has been applied. 0
+	// means no horizon — every remote message is expected to be cached.
+	SyncHorizonUID uint32
+	UnreadCount    int
+	TotalCount     int
 }
 
 // UpsertFolder inserts or updates a folder's identity fields (name,
@@ -63,7 +67,7 @@ func (db *DB) FolderID(ctx context.Context, accountID int64, path string) (int64
 // ListFolders returns all folders for accountID, ordered by path.
 func (db *DB) ListFolders(ctx context.Context, accountID int64) ([]FolderRow, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, account_id, path, name, delimiter, special_use, uidvalidity, uidnext, mod_seq, unread_count, total_count
+		SELECT id, account_id, path, name, delimiter, special_use, uidvalidity, uidnext, mod_seq, sync_horizon_uid, unread_count, total_count
 		FROM folders WHERE account_id = ? ORDER BY path
 	`, accountID)
 	if err != nil {
@@ -76,7 +80,7 @@ func (db *DB) ListFolders(ctx context.Context, accountID int64) ([]FolderRow, er
 		var f FolderRow
 		var delim, specialUse sql.NullString
 		if err := rows.Scan(&f.ID, &f.AccountID, &f.Path, &f.Name, &delim, &specialUse,
-			&f.UIDValidity, &f.UIDNext, &f.ModSeq, &f.UnreadCount, &f.TotalCount); err != nil {
+			&f.UIDValidity, &f.UIDNext, &f.ModSeq, &f.SyncHorizonUID, &f.UnreadCount, &f.TotalCount); err != nil {
 			return nil, fmt.Errorf("scan folder: %w", err)
 		}
 		f.Delimiter = delim.String
@@ -87,20 +91,24 @@ func (db *DB) ListFolders(ctx context.Context, accountID int64) ([]FolderRow, er
 }
 
 // UpdateFolderSyncState records a folder's post-sync UIDVALIDITY/UIDNEXT/
-// MODSEQ, recomputes its message counts from the messages table, and
-// returns those counts so callers (e.g. sync progress reporting) don't
-// need to track them separately as messages are upserted/deleted.
-func (db *DB) UpdateFolderSyncState(ctx context.Context, folderID int64, uidValidity, uidNext uint32, modSeq uint64) (total, unread int, err error) {
+// MODSEQ/sync-horizon, recomputes its message counts from the messages
+// table, and returns those counts so callers (e.g. sync progress
+// reporting) don't need to track them separately as messages are
+// upserted/deleted. Note that total/unread reflect what's cached locally,
+// which is only the whole mailbox when syncHorizonUID is 0 — otherwise
+// older messages below the horizon are intentionally left uncached.
+func (db *DB) UpdateFolderSyncState(ctx context.Context, folderID int64, uidValidity, uidNext uint32, modSeq uint64, syncHorizonUID uint32) (total, unread int, err error) {
 	if _, err := db.ExecContext(ctx, `
 		UPDATE folders SET
 			uidvalidity = ?,
 			uidnext = ?,
 			mod_seq = ?,
+			sync_horizon_uid = ?,
 			total_count = (SELECT COUNT(*) FROM messages WHERE folder_id = ?),
 			unread_count = (SELECT COUNT(*) FROM messages WHERE folder_id = ? AND seen = 0),
 			last_synced_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, uidValidity, uidNext, modSeq, folderID, folderID, folderID); err != nil {
+	`, uidValidity, uidNext, modSeq, syncHorizonUID, folderID, folderID, folderID); err != nil {
 		return 0, 0, fmt.Errorf("update folder sync state: %w", err)
 	}
 

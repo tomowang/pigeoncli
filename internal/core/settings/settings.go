@@ -13,7 +13,10 @@ import (
 // Settings holds the user preferences internal/tui reads at startup.
 type Settings struct {
 	SyncInterval time.Duration
-	Theme        string
+	// InitialSyncWindow caps how many of a folder's most recent messages
+	// are fully synced the first time it's synced; 0 means unlimited.
+	InitialSyncWindow int
+	Theme             string
 }
 
 // Service reads Settings from the config file. A Service is cheap to
@@ -34,5 +37,9 @@ func (s *Service) Get(ctx context.Context) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	return Settings{SyncInterval: cfg.Sync.Interval(), Theme: cfg.UI.Theme}, nil
+	return Settings{
+		SyncInterval:      cfg.Sync.Interval(),
+		InitialSyncWindow: cfg.Sync.InitialWindow(),
+		Theme:             cfg.UI.Theme,
+	}, nil
 }

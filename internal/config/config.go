@@ -49,7 +49,8 @@ type Account struct {
 
 // SyncConfig controls periodic background sync behavior.
 type SyncConfig struct {
-	IntervalMinutes int `toml:"interval_minutes,omitempty"`
+	IntervalMinutes    int `toml:"interval_minutes,omitempty"`
+	InitialWindowCount int `toml:"initial_window_count,omitempty"`
 }
 
 // defaultSyncIntervalMinutes is used when IntervalMinutes is unset or
@@ -63,6 +64,28 @@ func (s SyncConfig) Interval() time.Duration {
 		return defaultSyncIntervalMinutes * time.Minute
 	}
 	return time.Duration(s.IntervalMinutes) * time.Minute
+}
+
+// defaultInitialWindowCount bounds how many of a folder's most recent
+// messages get their headers fetched the first time that folder is
+// synced, so a large pre-existing mailbox doesn't fetch years of history
+// on first run. Older messages are simply left out of the local cache
+// until a future "load more" fetches them explicitly.
+const defaultInitialWindowCount = 1000
+
+// InitialWindow returns the configured initial-sync window, as a message
+// count: unset (0) uses defaultInitialWindowCount; a negative value
+// (e.g. -1) explicitly disables windowing, so the first sync fetches full
+// history like before this setting existed; a positive value is used as
+// given.
+func (s SyncConfig) InitialWindow() int {
+	if s.InitialWindowCount == 0 {
+		return defaultInitialWindowCount
+	}
+	if s.InitialWindowCount < 0 {
+		return 0
+	}
+	return s.InitialWindowCount
 }
 
 // UIConfig controls terminal UI preferences.

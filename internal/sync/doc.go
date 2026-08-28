@@ -9,5 +9,12 @@
 // callback for now; if a future phase needs streaming into the TUI's
 // self-re-arming tea.Cmd pattern, that can wrap the same callback.
 //
+// A folder's first sync (or its first sync after a UIDVALIDITY reset) can
+// be capped to its most recent Account.WindowCount messages instead of
+// fetching full history; the cutoff UID is persisted as the folder's
+// sync-horizon so later syncs keep excluding older messages rather than
+// re-treating them as new every time. Widening that horizon to fetch older
+// mail on demand ("load more") isn't implemented yet.
+//
 // Implemented in Phase 2.
 package sync

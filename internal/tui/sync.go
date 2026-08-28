@@ -14,6 +14,10 @@ import (
 // configured value.
 const defaultSyncInterval = 5 * time.Minute
 
+// defaultInitialSyncWindow mirrors config.SyncConfig's default and is used
+// until settingsLoadedMsg arrives with the configured value.
+const defaultInitialSyncWindow = 1000
+
 // settingsLoadedMsg reports the user's config-file preferences, loaded once
 // at startup.
 type settingsLoadedMsg struct {
@@ -49,9 +53,9 @@ func (m App) loadSettingsCmd() tea.Cmd {
 // tea.Cmd" pattern AGENTS.md documents for long-running streams, so Update
 // never blocks on a channel read directly.
 func (m App) startSyncCmd(cfg config.Account, ch chan<- folder.Progress) tea.Cmd {
-	ctx, svc := m.ctx, m.folderSvc
+	ctx, svc, windowCount := m.ctx, m.folderSvc, m.initialSyncWindow
 	return func() tea.Msg {
-		err := svc.Sync(ctx, cfg, func(p folder.Progress) { ch <- p })
+		err := svc.Sync(ctx, cfg, windowCount, func(p folder.Progress) { ch <- p })
 		close(ch)
 		return syncDoneMsg{err: err}
 	}

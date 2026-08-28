@@ -148,7 +148,10 @@ func (s *Service) Send(ctx context.Context, cfg config.Account, draft Draft) err
 	}
 
 	if s.folderSvc != nil {
-		_ = s.folderSvc.Sync(ctx, cfg, nil)
+		// windowCount only matters for a folder's first-ever sync; by now
+		// Sent has already been synced at least once, so 0 (no windowing)
+		// is fine here regardless of the user's configured window.
+		_ = s.folderSvc.Sync(ctx, cfg, 0, nil)
 	}
 	return nil
 }

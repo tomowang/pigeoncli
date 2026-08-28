@@ -9,6 +9,7 @@ import (
 
 	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
+	"github.com/tomowang/pigeoncli/internal/core/settings"
 	"github.com/tomowang/pigeoncli/internal/storage/blob"
 	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
@@ -41,7 +42,9 @@ func newBlobStore() (*blob.Store, error) {
 }
 
 func newSyncCmd() *cobra.Command {
-	return &cobra.Command{
+	var full bool
+
+	cmd := &cobra.Command{
 		Use:   "sync [slug]",
 		Short: "Sync mail accounts' folders and message headers",
 		Args:  cobra.MaximumNArgs(1),
@@ -69,6 +72,19 @@ func newSyncCmd() *cobra.Command {
 				}
 			}
 
+			resolvedCfgPath, err := resolveConfigPath()
+			if err != nil {
+				return err
+			}
+			windowCount := 0
+			if !full {
+				s, err := settings.NewService(resolvedCfgPath).Get(cmd.Context())
+				if err != nil {
+					return err
+				}
+				windowCount = s.InitialSyncWindow
+			}
+
 			db, err := openDB(cmd.Context())
 			if err != nil {
 				return err
@@ -79,7 +95,7 @@ func newSyncCmd() *cobra.Command {
 			for _, a := range targets {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Syncing %s...\n", a.Slug)
 				ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
-				err := folderSvc.Sync(ctx, a, func(p folder.Progress) {
+				err := folderSvc.Sync(ctx, a, windowCount, func(p folder.Progress) {
 					if p.Err != nil {
 						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: error: %v\n", p.Path, p.Err)
 						return
@@ -94,4 +110,7 @@ func newSyncCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&full, "full", false, "sync full folder history on first sync, ignoring the configured initial sync window")
+	return cmd
 }
