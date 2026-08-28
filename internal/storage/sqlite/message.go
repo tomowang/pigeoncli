@@ -27,7 +27,11 @@ type MessageHeader struct {
 }
 
 func (h MessageHeader) seen() bool {
-	for _, f := range h.Flags {
+	return hasSeenFlag(h.Flags)
+}
+
+func hasSeenFlag(flags []string) bool {
+	for _, f := range flags {
 		if f == `\Seen` {
 			return true
 		}
@@ -98,6 +102,71 @@ func (db *DB) UpsertMessageHeaders(ctx context.Context, accountID, folderID int6
 			h.FromName, h.FromAddr, string(toJSON), string(ccJSON), formatDate(h.Date), string(flagsJSON), seen, h.Size,
 		); err != nil {
 			return fmt.Errorf("upsert header uid=%d: %w", h.UID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ListMessageFlags returns each cached message's UID and flags for
+// folderID, without loading the rest of the header row. Sync uses this to
+// diff against a remote UID/flags fetch and decide which known messages
+// need their flags refreshed.
+func (db *DB) ListMessageFlags(ctx context.Context, folderID int64) (map[uint32][]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT uid, flags FROM messages WHERE folder_id = ?", folderID)
+	if err != nil {
+		return nil, fmt.Errorf("list message flags: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[uint32][]string)
+	for rows.Next() {
+		var uid uint32
+		var flagsJSON string
+		if err := rows.Scan(&uid, &flagsJSON); err != nil {
+			return nil, fmt.Errorf("scan message flags: %w", err)
+		}
+		var flags []string
+		if err := json.Unmarshal([]byte(flagsJSON), &flags); err != nil {
+			return nil, fmt.Errorf("decode flags for uid=%d: %w", uid, err)
+		}
+		out[uid] = flags
+	}
+	return out, rows.Err()
+}
+
+// UpdateMessageFlags updates just the flags/seen columns for a batch of
+// already-cached messages — the cheap refresh path used for messages whose
+// headers (immutable per UID) haven't changed since the last sync.
+func (db *DB) UpdateMessageFlags(ctx context.Context, folderID int64, updates map[uint32][]string) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update flags: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx,
+		"UPDATE messages SET flags = ?, seen = ?, synced_at = CURRENT_TIMESTAMP WHERE folder_id = ? AND uid = ?")
+	if err != nil {
+		return fmt.Errorf("prepare update flags: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for uid, flags := range updates {
+		flagsJSON, err := json.Marshal(flags)
+		if err != nil {
+			return fmt.Errorf("encode flags for uid=%d: %w", uid, err)
+		}
+		seen := 0
+		if hasSeenFlag(flags) {
+			seen = 1
+		}
+		if _, err := stmt.ExecContext(ctx, string(flagsJSON), seen, folderID, uid); err != nil {
+			return fmt.Errorf("update flags for uid=%d: %w", uid, err)
 		}
 	}
 

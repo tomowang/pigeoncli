@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/tomowang/pigeoncli/internal/auth"
@@ -102,30 +103,63 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 		}
 	}
 
-	headers, err := cl.FetchAllHeaders(ctx)
+	// Cheap first pass: just UIDs and flags for the whole folder. Diffed
+	// against what's already cached, this tells us which UIDs are new
+	// (need a full envelope fetch) vs. already known (headers are
+	// immutable per UID, so only a changed flag set needs writing back).
+	remoteFlags, err := cl.FetchUIDsAndFlags(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("fetch headers: %w", err)
+		return 0, 0, fmt.Errorf("fetch uids/flags: %w", err)
+	}
+	localFlags, err := db.ListMessageFlags(ctx, folderID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("load cached flags: %w", err)
 	}
 
-	rows := make([]sqlite.MessageHeader, len(headers))
-	uids := make([]uint32, len(headers))
-	for i, h := range headers {
-		rows[i] = sqlite.MessageHeader{
-			UID: h.UID, MessageID: h.MessageID, InReplyTo: h.InReplyTo, References: h.References, Subject: h.Subject,
-			FromName: h.FromName, FromAddr: h.FromAddr, ToAddrs: h.ToAddrs, CcAddrs: h.CcAddrs,
-			Date: h.Date, Flags: h.Flags, Size: h.Size,
+	var newUIDs []uint32
+	flagUpdates := make(map[uint32][]string)
+	for uid, flags := range remoteFlags {
+		if lf, ok := localFlags[uid]; ok {
+			if !flagsEqual(lf, flags) {
+				flagUpdates[uid] = flags
+			}
+		} else {
+			newUIDs = append(newUIDs, uid)
 		}
-		uids[i] = h.UID
-		if !seen(h.Flags) {
+	}
+
+	if len(newUIDs) > 0 {
+		headers, err := cl.FetchHeaders(ctx, newUIDs)
+		if err != nil {
+			return 0, 0, fmt.Errorf("fetch new headers: %w", err)
+		}
+		rows := make([]sqlite.MessageHeader, len(headers))
+		for i, h := range headers {
+			rows[i] = sqlite.MessageHeader{
+				UID: h.UID, MessageID: h.MessageID, InReplyTo: h.InReplyTo, References: h.References, Subject: h.Subject,
+				FromName: h.FromName, FromAddr: h.FromAddr, ToAddrs: h.ToAddrs, CcAddrs: h.CcAddrs,
+				Date: h.Date, Flags: h.Flags, Size: h.Size,
+			}
+		}
+		if err := db.UpsertMessageHeaders(ctx, accountID, folderID, rows); err != nil {
+			return 0, 0, fmt.Errorf("store new headers: %w", err)
+		}
+	}
+
+	if err := db.UpdateMessageFlags(ctx, folderID, flagUpdates); err != nil {
+		return 0, 0, fmt.Errorf("update flags: %w", err)
+	}
+
+	remoteUIDs := make([]uint32, 0, len(remoteFlags))
+	for uid, flags := range remoteFlags {
+		remoteUIDs = append(remoteUIDs, uid)
+		if !seen(flags) {
 			unread++
 		}
 	}
-	total = len(rows)
+	total = len(remoteFlags)
 
-	if err := db.UpsertMessageHeaders(ctx, accountID, folderID, rows); err != nil {
-		return 0, 0, fmt.Errorf("store headers: %w", err)
-	}
-	if err := db.DeleteMessagesNotIn(ctx, folderID, uids); err != nil {
+	if err := db.DeleteMessagesNotIn(ctx, folderID, remoteUIDs); err != nil {
 		return 0, 0, fmt.Errorf("reconcile deletions: %w", err)
 	}
 	if err := db.UpdateFolderSyncState(ctx, folderID, uidValidity, uidNext); err != nil {
@@ -133,6 +167,24 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 	}
 
 	return total, unread, nil
+}
+
+// flagsEqual reports whether a and b contain the same flags, ignoring
+// order.
+func flagsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sa := append([]string(nil), a...)
+	sb := append([]string(nil), b...)
+	sort.Strings(sa)
+	sort.Strings(sb)
+	for i := range sa {
+		if sa[i] != sb[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func seen(flags []string) bool {

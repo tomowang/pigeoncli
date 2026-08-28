@@ -145,17 +145,48 @@ type MessageHeader struct {
 	Size       int64
 }
 
-// FetchAllHeaders fetches envelope/flags/size for every message currently
-// in the selected mailbox.
-//
-// This always re-fetches the whole mailbox rather than only new UIDs plus a
-// separate flag-refresh pass for known ones (as sketched in the design
-// doc) — simpler and correct at personal-mailbox scale. If sync time on
-// large mailboxes becomes a problem, split this into a UID-range fetch for
-// new messages and a FLAGS-only fetch for previously known ones.
-func (cl *Client) FetchAllHeaders(ctx context.Context) ([]MessageHeader, error) {
+// FetchUIDsAndFlags fetches just the UID and flags for every message
+// currently in the selected mailbox — cheap compared to FetchHeaders since
+// it skips envelopes entirely. Sync uses this to diff against the local
+// cache and decide which messages actually need a full header fetch vs.
+// just a flags refresh.
+func (cl *Client) FetchUIDsAndFlags(ctx context.Context) (map[uint32][]string, error) {
 	var uidSet imap.UIDSet
 	uidSet.AddRange(1, 0) // "1:*"
+
+	bufs, err := cl.c.Fetch(uidSet, &imap.FetchOptions{
+		UID:   true,
+		Flags: true,
+	}).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("fetch uids/flags: %w", err)
+	}
+
+	out := make(map[uint32][]string, len(bufs))
+	for _, b := range bufs {
+		flags := make([]string, len(b.Flags))
+		for i, f := range b.Flags {
+			flags[i] = string(f)
+		}
+		out[uint32(b.UID)] = flags
+	}
+	return out, nil
+}
+
+// FetchHeaders fetches envelope/flags/size for the given UIDs. Message
+// headers are immutable once assigned to a UID, so this only needs to be
+// called for UIDs not already in the local cache — see FetchUIDsAndFlags
+// for the cheap path that refreshes flags on already-cached messages.
+func (cl *Client) FetchHeaders(ctx context.Context, uids []uint32) ([]MessageHeader, error) {
+	if len(uids) == 0 {
+		return nil, nil
+	}
+
+	nums := make([]imap.UID, len(uids))
+	for i, u := range uids {
+		nums[i] = imap.UID(u)
+	}
+	uidSet := imap.UIDSetNum(nums...)
 
 	// ENVELOPE (RFC 3501) only carries In-Reply-To, never References, so
 	// References needs its own raw-header fetch. BODY.PEEK[HEADER.FIELDS
