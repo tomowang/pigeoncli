@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -41,8 +42,11 @@ type Account struct {
 // called once per folder as syncing completes (successfully or not);
 // syncing continues with the remaining folders after a per-folder error.
 func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(FolderProgress)) error {
+	slog.Info("sync account start", "account", a.Slug)
+
 	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: a.IMAP.Host, Port: a.IMAP.Port, TLS: a.IMAP.TLS}, a.Provider)
 	if err != nil {
+		slog.Error("sync account connect failed", "account", a.Slug, "err", err)
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer func() { _ = cl.Close() }()
@@ -55,6 +59,7 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 
 	remoteFolders, err := cl.ListFolders(ctx)
 	if err != nil {
+		slog.Error("sync account list folders failed", "account", a.Slug, "err", err)
 		return fmt.Errorf("list folders: %w", err)
 	}
 
@@ -72,15 +77,18 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 		total, unread, err := syncFolder(ctx, db, cl, accountID, rf, priorByPath[rf.Path], a.WindowCount)
 		if err != nil {
 			result.Err = fmt.Errorf("sync %q: %w", rf.Path, err)
+			slog.Error("sync folder failed", "account", a.Slug, "folder", rf.Path, "err", result.Err)
 		} else {
 			result.TotalCount = total
 			result.UnreadCount = unread
+			slog.Info("sync folder complete", "account", a.Slug, "folder", rf.Path, "total", total, "unread", unread)
 		}
 		if onProgress != nil {
 			onProgress(result)
 		}
 	}
 
+	slog.Info("sync account complete", "account", a.Slug, "folders", len(remoteFolders))
 	return db.SetAccountSyncedNow(ctx, accountID)
 }
 
@@ -104,6 +112,7 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 
 	uidValidityChanged := prior.UIDValidity != 0 && prior.UIDValidity != uidValidity
 	if uidValidityChanged {
+		slog.Warn("uidvalidity changed, clearing cached messages", "folder", rf.Path, "priorUIDValidity", prior.UIDValidity, "newUIDValidity", uidValidity)
 		if err := db.ClearFolderMessages(ctx, folderID); err != nil {
 			return 0, 0, fmt.Errorf("clear stale cache after uidvalidity change: %w", err)
 		}
@@ -116,6 +125,7 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 	// session (highestModSeq != 0), and no UIDVALIDITY reset just now —
 	// otherwise fall back to the full listing.
 	useCondStore := prior.ModSeq != 0 && highestModSeq != 0 && !uidValidityChanged
+	slog.Debug("sync folder strategy", "folder", rf.Path, "useCondStore", useCondStore, "uidValidityChanged", uidValidityChanged, "priorModSeq", prior.ModSeq, "highestModSeq", highestModSeq)
 
 	var changedFlags map[uint32][]string
 	if useCondStore {
@@ -163,6 +173,7 @@ func syncFolder(ctx context.Context, db *sqlite.DB, cl *imap.Client, accountID i
 		// check, every subsequent sync would treat these old UIDs as
 		// "new" forever, since they're never added to the local cache.
 	}
+	slog.Debug("sync folder uid diff", "folder", rf.Path, "new", len(newUIDs), "flagUpdates", len(flagUpdates), "horizon", horizon)
 
 	if len(newUIDs) > 0 {
 		headers, err := cl.FetchHeaders(ctx, newUIDs)

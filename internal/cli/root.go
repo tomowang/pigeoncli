@@ -4,6 +4,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
 	"github.com/tomowang/pigeoncli/internal/core/compose"
@@ -11,14 +13,18 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
 	"github.com/tomowang/pigeoncli/internal/core/signature"
+	"github.com/tomowang/pigeoncli/internal/logging"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
 
 var (
-	cfgPath  string
-	dbPath   string
-	blobDir  string
-	logLevel string
+	cfgPath     string
+	dbPath      string
+	blobDir     string
+	logLevel    string
+	logFilePath string
+
+	closeLogging func() error
 )
 
 func newRootCmd() *cobra.Command {
@@ -30,6 +36,26 @@ func newRootCmd() *cobra.Command {
 		// a second time or dump usage for runtime (non-flag-parsing) errors.
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			level, err := logging.ParseLevel(logLevel)
+			if err != nil {
+				return fmt.Errorf("invalid --log-level: %w", err)
+			}
+			path := logFilePath
+			if path == "" {
+				path, err = logging.DefaultPath()
+				if err != nil {
+					return err
+				}
+			}
+			closeLogging, err = logging.Init(path, level)
+			return err
+		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			if closeLogging != nil {
+				_ = closeLogging()
+			}
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			acctSvc, err := newAccountService()
 			if err != nil {
@@ -64,6 +90,7 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&dbPath, "db", "", "path to local sqlite cache (default: XDG cache dir)")
 	cmd.PersistentFlags().StringVar(&blobDir, "blobs", "", "path to local message body cache (default: XDG cache dir)")
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
+	cmd.PersistentFlags().StringVar(&logFilePath, "log-file", "", "path to log file (default: XDG cache dir)")
 
 	cmd.AddCommand(newVersionCmd())
 	cmd.AddCommand(newAccountCmd())

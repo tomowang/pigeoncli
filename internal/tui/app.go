@@ -10,6 +10,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -292,6 +293,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case accountsLoadedMsg:
 		if msg.err != nil {
+			slog.Error("load accounts failed", "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("load accounts: %v", msg.err), sevError)
 			return m, cmd
@@ -311,6 +313,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case foldersLoadedMsg:
 		if msg.err != nil {
+			slog.Error("load folders failed", "account", msg.slug, "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("load folders for %s: %v", msg.slug, msg.err), sevError)
 			m.folders.SetItems(nil)
@@ -340,6 +343,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messagesLoadedMsg:
 		if msg.err != nil {
+			slog.Error("load messages failed", "folder", msg.folderPath, "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("load messages for %s: %v", msg.folderPath, msg.err), sevError)
 			m.messages.SetItems(nil)
@@ -375,6 +379,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.idleCancel = nil
 		m.idleCh = nil
 		if msg.err != nil {
+			slog.Warn("live updates unavailable", "folder", msg.folderPath, "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("live updates unavailable for %s: %v", msg.folderPath, msg.err), sevInfo)
 			return m, cmd
@@ -384,6 +389,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messageBodyLoadedMsg:
 		m = m.stopBusy()
 		if msg.err != nil {
+			slog.Error("open message failed", "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("open message: %v", msg.err), sevError)
 			return m, cmd
@@ -399,10 +405,12 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sendResultMsg:
 		if msg.err != nil {
+			slog.Error("send message failed", "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("send failed: %v", msg.err), sevError)
 			return m, cmd
 		}
+		slog.Info("message sent")
 		m.composing = false
 		var cmd tea.Cmd
 		m, cmd = m.setStatus("Message sent.", sevSuccess)
@@ -412,10 +420,12 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case accountAddedMsg:
 		if msg.err != nil {
+			slog.Error("add account failed", "err", msg.err)
 			var cmd tea.Cmd
 			m, cmd = m.setStatus(fmt.Sprintf("add account: %v", msg.err), sevError)
 			return m, cmd
 		}
+		slog.Info("account added", "slug", msg.slug)
 		m.addingAccount = false
 		var cmd tea.Cmd
 		m, cmd = m.setStatus(fmt.Sprintf("Account %q added.", msg.slug), sevSuccess)
@@ -529,8 +539,10 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncCh = nil
 		var cmd tea.Cmd
 		if msg.err != nil {
+			slog.Error("tui sync failed", "account", m.selectedAccount.Slug, "err", msg.err)
 			m, cmd = m.setStatus(fmt.Sprintf("sync failed: %v", msg.err), sevError)
 		} else {
+			slog.Info("tui sync complete", "account", m.selectedAccount.Slug)
 			m.lastSyncAt = time.Now()
 			m, cmd = m.setStatus("Sync complete.", sevSuccess)
 		}

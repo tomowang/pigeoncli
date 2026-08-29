@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/tomowang/pigeoncli/internal/auth"
 	"github.com/tomowang/pigeoncli/internal/config"
@@ -27,27 +28,33 @@ import (
 func WatchFolder(ctx context.Context, imapCfg config.ServerConfig, provider auth.Provider, folderPath string, onUpdate func()) error {
 	cl, err := imap.DialClientWithUpdates(ctx, imap.DialOptions{Host: imapCfg.Host, Port: imapCfg.Port, TLS: imapCfg.TLS}, provider, onUpdate)
 	if err != nil {
+		slog.Error("idle watch connect failed", "folder", folderPath, "err", err)
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer func() { _ = cl.Close() }()
 	defer cl.WatchContext(ctx)()
 
 	if !cl.SupportsIdle() {
+		slog.Warn("idle unsupported, live updates disabled", "folder", folderPath)
 		return fmt.Errorf("server does not support IMAP IDLE")
 	}
 
 	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
+		slog.Error("idle watch select failed", "folder", folderPath, "err", err)
 		return fmt.Errorf("select %q: %w", folderPath, err)
 	}
 
+	slog.Info("idle watch start", "folder", folderPath)
 	if err := cl.Idle(); err != nil {
 		// WatchContext force-closes the connection when ctx is canceled,
 		// which surfaces here as a connection error rather than a clean
 		// return — that's the expected, silent shutdown path, not a
 		// real failure.
 		if ctx.Err() != nil {
+			slog.Info("idle watch stopped", "folder", folderPath, "reason", "context canceled")
 			return nil
 		}
+		slog.Warn("idle watch lost live updates", "folder", folderPath, "err", err)
 		return fmt.Errorf("idle: %w", err)
 	}
 	return nil

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -39,6 +40,7 @@ func (m App) startIdleCmd(ctx context.Context, cfg config.Account, folderPath st
 			default:
 			}
 		})
+		slog.Debug("idle watcher goroutine returned", "account", cfg.Slug, "folder", folderPath, "err", err)
 		return idleStoppedMsg{accountSlug: cfg.Slug, folderPath: folderPath, err: err}
 	}
 }

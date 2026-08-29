@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -94,16 +95,20 @@ func newSyncCmd() *cobra.Command {
 
 			for _, a := range targets {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Syncing %s...\n", a.Slug)
+				slog.Info("cli sync start", "account", a.Slug)
 				ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
 				err := folderSvc.Sync(ctx, a, windowCount, func(p folder.Progress) {
 					if p.Err != nil {
+						slog.Error("cli sync folder failed", "account", a.Slug, "folder", p.Path, "err", p.Err)
 						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: error: %v\n", p.Path, p.Err)
 						return
 					}
+					slog.Info("cli sync folder complete", "account", a.Slug, "folder", p.Path, "total", p.TotalCount, "unread", p.UnreadCount)
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: %d messages (%d unread)\n", p.Path, p.TotalCount, p.UnreadCount)
 				})
 				cancel()
 				if err != nil {
+					slog.Error("cli sync account failed", "account", a.Slug, "err", err)
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  account error: %v\n", err)
 				}
 			}
