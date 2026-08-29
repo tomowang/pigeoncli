@@ -326,6 +326,21 @@ func (cl *Client) FetchRawBody(ctx context.Context, uid uint32) ([]byte, error) 
 	return bufs[0].BodySection[0].Bytes, nil
 }
 
+// MarkSeen sets the \Seen flag on the given UID in the currently selected
+// mailbox, telling the server the message has been read.
+func (cl *Client) MarkSeen(ctx context.Context, uid uint32) error {
+	uidSet := imap.UIDSetNum(imap.UID(uid))
+	storeFlags := &imap.StoreFlags{
+		Op:     imap.StoreFlagsAdd,
+		Flags:  []imap.Flag{imap.FlagSeen},
+		Silent: true,
+	}
+	if err := cl.c.Store(uidSet, storeFlags, nil).Close(); err != nil {
+		return fmt.Errorf("mark seen uid=%d: %w", uid, err)
+	}
+	return nil
+}
+
 func headerFromBuffer(b *imapclient.FetchMessageBuffer) MessageHeader {
 	h := MessageHeader{
 		UID:     uint32(b.UID),

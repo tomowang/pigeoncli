@@ -3,6 +3,7 @@ package message
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/tomowang/pigeoncli/internal/auth"
@@ -12,6 +13,9 @@ import (
 	"github.com/tomowang/pigeoncli/internal/storage/blob"
 	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
+
+// seenFlag is the IMAP flag marking a message as read.
+const seenFlag = `\Seen`
 
 // listLimit caps how many cached messages List returns per folder. Full
 // pagination/infinite-scroll is deferred; at personal-mailbox scale, the
@@ -185,7 +189,8 @@ func (s *Service) Search(ctx context.Context, accountSlug, query string) ([]Sear
 // Body returns the raw and rendered content of one message. If the body
 // hasn't been fetched yet, it connects to cfg's IMAP server (using its
 // keyring credentials), fetches it, and caches it locally before
-// returning.
+// returning. It also marks the message \Seen, both on the server and in
+// the local cache, the same as any other mail client does on open.
 func (s *Service) Body(ctx context.Context, cfg config.Account, folderPath string, uid uint32) (Body, error) {
 	_, folderID, err := s.resolveIDs(ctx, cfg.Slug, folderPath)
 	if err != nil {
@@ -195,6 +200,13 @@ func (s *Service) Body(ctx context.Context, cfg config.Account, folderPath strin
 	raw, err := s.cachedOrFetchRaw(ctx, cfg, folderPath, folderID, uid)
 	if err != nil {
 		return Body{}, err
+	}
+
+	// Best-effort: a failed mark-as-read (e.g. a network blip right after
+	// the body fetch succeeded) shouldn't stop the message from being
+	// shown, so this only logs rather than returning the error.
+	if err := s.markSeen(ctx, cfg, folderPath, folderID, uid); err != nil {
+		slog.Warn("mark message seen failed", "folder", folderPath, "uid", uid, "err", err)
 	}
 
 	plainText, err := mime.PlainText(raw)
@@ -297,6 +309,44 @@ func (s *Service) fetchRaw(ctx context.Context, cfg config.Account, folderPath s
 		return nil, fmt.Errorf("fetch body: %w", err)
 	}
 	return raw, nil
+}
+
+// markSeen sets \Seen on uid, on the server and in the local cache, unless
+// it's already marked seen locally — the common case once a message has
+// been opened once, which skips the connection entirely.
+func (s *Service) markSeen(ctx context.Context, cfg config.Account, folderPath string, folderID int64, uid uint32) error {
+	flags, err := s.db.MessageFlags(ctx, folderID, uid)
+	if err != nil {
+		return err
+	}
+	for _, f := range flags {
+		if f == seenFlag {
+			return nil
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
+	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer func() { _ = cl.Close() }()
+	defer cl.WatchContext(ctx)()
+
+	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
+		return fmt.Errorf("select %q: %w", folderPath, err)
+	}
+	if err := cl.MarkSeen(ctx, uid); err != nil {
+		return err
+	}
+
+	if err := s.db.UpdateMessageFlags(ctx, folderID, map[uint32][]string{uid: append(flags, seenFlag)}); err != nil {
+		return fmt.Errorf("cache seen flag: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) resolveIDs(ctx context.Context, accountSlug, folderPath string) (accountID, folderID int64, err error) {

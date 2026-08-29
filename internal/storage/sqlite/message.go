@@ -173,6 +173,22 @@ func (db *DB) UpdateMessageFlags(ctx context.Context, folderID int64, updates ma
 	return tx.Commit()
 }
 
+// MessageFlags returns a single cached message's flags, for callers (e.g.
+// mark-as-read) that need to check/update one message's state without
+// pulling the whole folder like ListMessageFlags does.
+func (db *DB) MessageFlags(ctx context.Context, folderID int64, uid uint32) ([]string, error) {
+	var flagsJSON string
+	err := db.QueryRowContext(ctx, "SELECT flags FROM messages WHERE folder_id = ? AND uid = ?", folderID, uid).Scan(&flagsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("load flags for uid=%d: %w", uid, err)
+	}
+	var flags []string
+	if err := json.Unmarshal([]byte(flagsJSON), &flags); err != nil {
+		return nil, fmt.Errorf("decode flags for uid=%d: %w", uid, err)
+	}
+	return flags, nil
+}
+
 // DeleteMessagesNotIn removes cached messages in folderID whose UID isn't
 // in keepUIDs — used to reconcile server-side deletions/expunges.
 func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs []uint32) error {

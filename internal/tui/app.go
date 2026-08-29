@@ -401,7 +401,12 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoTop()
 		m.layout() // viewport height depends on whether this message has an attachments line
 		m = m.clearStatus()
-		return m, nil
+		// Opening a message marks it \Seen (see Service.Body); reload the
+		// message list and folder unread counts to reflect that.
+		return m, tea.Batch(
+			m.loadMessagesCmd(m.selectedAccount.Slug, m.selectedFolder),
+			m.loadFoldersCmd(m.selectedAccount.Slug),
+		)
 
 	case sendResultMsg:
 		if msg.err != nil {
