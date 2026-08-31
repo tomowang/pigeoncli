@@ -1,0 +1,113 @@
+# pigeon
+
+pigeon is a local email client for the terminal, built on
+[bubbletea](https://github.com/charmbracelet/bubbletea). It syncs IMAP
+mailboxes into a local SQLite cache so browsing works offline, and sends
+mail over SMTP. A CLI covers account setup, sync, and signatures; a
+TUI covers day-to-day reading and composing. An HTTP API is planned as a
+third frontend.
+
+## Status
+
+Early scaffold (Phase 0). Expect missing features and rough edges — see
+[AGENTS.md](./AGENTS.md) for the architecture and phased build plan.
+
+## Install
+
+Requires Go 1.27+.
+
+```
+go install github.com/tomowang/pigeoncli/cmd/pigeon@latest
+```
+
+Or build from source:
+
+```
+git clone https://github.com/tomowang/pigeoncli
+cd pigeoncli
+make build   # -> bin/pigeon
+```
+
+## Quick start
+
+```
+pigeon account add work \
+  --email you@example.com \
+  --imap-host imap.example.com \
+  --smtp-host smtp.example.com
+# prompts for the account password, stored in the OS keyring
+
+pigeon account test work   # verify IMAP/SMTP login
+pigeon sync work           # pull folders and headers into the local cache
+pigeon                     # launch the TUI
+```
+
+Passwords are never written to disk in plaintext — they're stored via the
+OS keyring (`internal/auth`). Connection settings (host, port, TLS,
+username) live in a TOML config file.
+
+## CLI
+
+```
+pigeon                          # launch the TUI (default, no subcommand)
+pigeon version                  # print build info
+
+pigeon account add <slug>       # add an account (prompts for password)
+pigeon account edit <slug>      # edit an account's settings
+pigeon account list             # list configured accounts
+pigeon account remove <slug>    # remove an account
+pigeon account test <slug>      # test IMAP/SMTP connectivity
+
+pigeon sync [slug]               # sync one account, or all if omitted
+pigeon sync [slug] --full        # ignore the initial sync window, sync full history
+
+pigeon signature add <name>      # add a signature (--account, --body, --default)
+pigeon signature list            # list signatures (--account to filter)
+pigeon signature edit <id>       # edit a signature's name/body
+pigeon signature remove <id>     # remove a signature
+pigeon signature set-default <id> # make a signature the default in its scope
+```
+
+Global flags (any subcommand): `--config`, `--db`, `--blobs`, `--log-level`,
+`--log-file`. Each defaults to the XDG config/cache directories when unset.
+
+## TUI keybindings
+
+| Key | Action |
+|---|---|
+| `tab` | switch pane (accounts / folders / messages) |
+| `↑/↓`, `j/k` | move selection, scroll |
+| `enter` | open selection |
+| `a` | add a new account |
+| `c` | compose a new message |
+| `s` | sync the selected account (also runs automatically in the background) |
+| `/` | search subject/from/to/cc for the selected account |
+| `?` | toggle help |
+| `L` | toggle the status log |
+| `q` / `ctrl+c` | quit (asks to confirm); press `ctrl+c` twice to quit immediately |
+
+In the message viewer: `r` reply, `R` reply-all, `t` toggle raw/rendered,
+`g` go to related messages, `a` save an attachment, `esc` back to list.
+
+Press `?` inside the TUI for the full, context-aware list.
+
+## Development
+
+```
+make build   # build ./cmd/pigeon -> bin/pigeon
+make run     # go run ./cmd/pigeon
+make test    # go test ./...
+make vet     # go vet ./...
+make lint    # golangci-lint run
+make tidy    # go mod tidy
+```
+
+The TUI requires a real TTY; it won't run under a piped or backgrounded
+shell.
+
+See [AGENTS.md](./AGENTS.md) for the full architecture, package layout,
+and commit conventions.
+
+## License
+
+[MIT](./LICENSE)
