@@ -8,38 +8,16 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tomowang/pigeoncli/internal/core"
 	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
-	"github.com/tomowang/pigeoncli/internal/storage/blob"
-	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
 
-func resolveDBPath() (string, error) {
-	if dbPath != "" {
-		return dbPath, nil
-	}
-	return sqlite.DefaultPath()
-}
-
-func openDB(ctx context.Context) (*sqlite.DB, error) {
-	path, err := resolveDBPath()
-	if err != nil {
-		return nil, err
-	}
-	return sqlite.Open(ctx, path)
-}
-
-func newBlobStore() (*blob.Store, error) {
-	dir := blobDir
-	if dir == "" {
-		var err error
-		dir, err = blob.DefaultDir()
-		if err != nil {
-			return nil, err
-		}
-	}
-	return blob.NewStore(dir), nil
+// openStore opens the local sqlite cache and blob store at the paths
+// configured by the --db/--blobs flags (or their defaults, if unset).
+func openStore(ctx context.Context) (*core.Store, error) {
+	return core.Open(ctx, dbPath, blobDir)
 }
 
 func newSyncCmd() *cobra.Command {
@@ -86,12 +64,12 @@ func newSyncCmd() *cobra.Command {
 				windowCount = s.InitialSyncWindow
 			}
 
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
-			folderSvc := folder.NewService(db)
+			defer func() { _ = st.Close() }()
+			folderSvc := st.Folder
 
 			for _, a := range targets {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Syncing %s...\n", a.Slug)

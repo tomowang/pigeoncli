@@ -54,12 +54,12 @@ func newSignatureAddCmd() *cobra.Command {
 				return err
 			}
 
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
-			sig, err := signature.NewService(db).Add(cmd.Context(), account, args[0], text, isDefault)
+			defer func() { _ = st.Close() }()
+			sig, err := st.Signature.Add(cmd.Context(), account, args[0], text, isDefault)
 			if err != nil {
 				return err
 			}
@@ -80,12 +80,12 @@ func newSignatureListCmd() *cobra.Command {
 		Short: "List saved signatures",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
-			svc := signature.NewService(db)
+			defer func() { _ = st.Close() }()
+			svc := st.Signature
 			var sigs []signature.Signature
 			if cmd.Flags().Changed("account") {
 				sigs, err = svc.List(cmd.Context(), account)
@@ -135,12 +135,12 @@ func newSignatureEditCmd() *cobra.Command {
 				return fmt.Errorf("at least one of --name or --body is required")
 			}
 
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
-			svc := signature.NewService(db)
+			defer func() { _ = st.Close() }()
+			svc := st.Signature
 			sigs, err := svc.ListAll(cmd.Context())
 			if err != nil {
 				return err
@@ -187,12 +187,12 @@ func newSignatureRemoveCmd() *cobra.Command {
 				return fmt.Errorf("invalid signature id %q", args[0])
 			}
 
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
-			if err := signature.NewService(db).Remove(cmd.Context(), id); err != nil {
+			defer func() { _ = st.Close() }()
+			if err := st.Signature.Remove(cmd.Context(), id); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Signature %d removed.\n", id)
@@ -212,12 +212,12 @@ func newSignatureSetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("invalid signature id %q", args[0])
 			}
 
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
-			if err := signature.NewService(db).SetDefault(cmd.Context(), id); err != nil {
+			defer func() { _ = st.Close() }()
+			if err := st.Signature.SetDefault(cmd.Context(), id); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Signature %d is now the default.\n", id)

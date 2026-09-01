@@ -9,10 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tomowang/pigeoncli/internal/core/compose"
-	"github.com/tomowang/pigeoncli/internal/core/folder"
-	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
-	"github.com/tomowang/pigeoncli/internal/core/signature"
 	"github.com/tomowang/pigeoncli/internal/logging"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
@@ -65,24 +62,16 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := openDB(cmd.Context())
+			st, err := openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
-			defer func() { _ = db.Close() }()
+			defer func() { _ = st.Close() }()
 
-			blobs, err := newBlobStore()
-			if err != nil {
-				return err
-			}
-
-			folderSvc := folder.NewService(db)
-			messageSvc := message.NewService(db, blobs)
-			signatureSvc := signature.NewService(db)
-			composeSvc := compose.NewService(folderSvc, signatureSvc)
+			composeSvc := compose.NewService(st.Folder, st.Signature)
 			settingsSvc := settings.NewService(resolvedCfgPath)
 
-			return tui.Run(cmd.Context(), acctSvc, folderSvc, messageSvc, composeSvc, settingsSvc)
+			return tui.Run(cmd.Context(), acctSvc, st.Folder, st.Message, composeSvc, settingsSvc)
 		},
 	}
 
