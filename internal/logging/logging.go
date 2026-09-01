@@ -9,14 +9,14 @@ import (
 )
 
 // DefaultPath returns the default log file path
-// ($XDG_CACHE_HOME/pigeon/pigeon.log, or the OS equivalent), matching the
+// ($XDG_CACHE_HOME/pigeon/pigeon.jsonl, or the OS equivalent), matching the
 // convention used by sqlite.DefaultPath() and blob.DefaultDir().
 func DefaultPath() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve cache dir: %w", err)
 	}
-	return filepath.Join(dir, "pigeon", "pigeon.log"), nil
+	return filepath.Join(dir, "pigeon", "pigeon.jsonl"), nil
 }
 
 // ParseLevel maps a --log-level flag value (debug, info, warn, or error,
@@ -37,9 +37,10 @@ func ParseLevel(s string) (slog.Level, error) {
 }
 
 // Init opens path for appending (creating its parent directory and the
-// file itself if needed) and installs a slog.Logger writing to it at level
-// as the process-wide default (slog.SetDefault). The returned close func
-// closes the underlying file and should be called on shutdown.
+// file itself if needed) and installs a slog.Logger writing JSON Lines
+// (one JSON object per record) to it at level as the process-wide default
+// (slog.SetDefault). The returned close func closes the underlying file
+// and should be called on shutdown.
 func Init(path string, level slog.Level) (close func() error, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create log dir: %w", err)
@@ -48,7 +49,7 @@ func Init(path string, level slog.Level) (close func() error, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
-	handler := slog.NewTextHandler(f, &slog.HandlerOptions{Level: level})
+	handler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level})
 	slog.SetDefault(slog.New(handler))
 	return f.Close, nil
 }

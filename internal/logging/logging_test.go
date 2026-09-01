@@ -13,7 +13,7 @@ func TestDefaultPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DefaultPath: %v", err)
 	}
-	want := filepath.Join("pigeon", "pigeon.log")
+	want := filepath.Join("pigeon", "pigeon.jsonl")
 	if !strings.HasSuffix(path, want) {
 		t.Fatalf("DefaultPath() = %q, want suffix %q", path, want)
 	}
@@ -51,7 +51,7 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestInitCreatesFileAndDirsAndFilters(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "pigeon.log")
+	path := filepath.Join(t.TempDir(), "nested", "pigeon.jsonl")
 
 	closeFn, err := Init(path, slog.LevelWarn)
 	if err != nil {
@@ -79,7 +79,7 @@ func TestInitCreatesFileAndDirsAndFilters(t *testing.T) {
 }
 
 func TestInitAppendsAcrossCalls(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pigeon.log")
+	path := filepath.Join(t.TempDir(), "pigeon.jsonl")
 
 	closeFn, err := Init(path, slog.LevelInfo)
 	if err != nil {
