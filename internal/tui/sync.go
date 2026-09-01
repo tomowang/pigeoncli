@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/tomowang/pigeoncli/internal/config"
+	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
 )
@@ -52,7 +52,7 @@ func (m App) loadSettingsCmd() tea.Cmd {
 // listenSyncProgressCmd, this is the "channel plus a self-re-arming
 // tea.Cmd" pattern AGENTS.md documents for long-running streams, so Update
 // never blocks on a channel read directly.
-func (m App) startSyncCmd(cfg config.Account, ch chan<- folder.Progress) tea.Cmd {
+func (m App) startSyncCmd(cfg account.Account, ch chan<- folder.Progress) tea.Cmd {
 	ctx, svc, windowCount := m.ctx, m.folderSvc, m.initialSyncWindow
 	return func() tea.Msg {
 		err := svc.Sync(ctx, cfg, windowCount, func(p folder.Progress) { ch <- p })

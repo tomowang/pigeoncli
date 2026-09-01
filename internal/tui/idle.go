@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/tomowang/pigeoncli/internal/config"
+	"github.com/tomowang/pigeoncli/internal/core/account"
 )
 
 // idleUpdateMsg reports that the currently-watched folder changed on the
@@ -31,7 +31,7 @@ type idleStoppedMsg struct {
 // listenIdleCmd, this is the same "channel plus a self-re-arming tea.Cmd"
 // pattern used for sync progress (see sync.go), so Update never blocks on
 // a channel read directly.
-func (m App) startIdleCmd(ctx context.Context, cfg config.Account, folderPath string, ch chan<- struct{}) tea.Cmd {
+func (m App) startIdleCmd(ctx context.Context, cfg account.Account, folderPath string, ch chan<- struct{}) tea.Cmd {
 	svc := m.folderSvc
 	return func() tea.Msg {
 		err := svc.Watch(ctx, cfg, folderPath, func() {
@@ -61,7 +61,7 @@ func listenIdleCmd(ch <-chan struct{}) tea.Cmd {
 // new one for cfg/folderPath, unless one is already running for that
 // exact pair. Passing an empty cfg.Slug or folderPath just stops
 // watching (e.g. no folder selected yet).
-func (m App) restartIdleCmd(cfg config.Account, folderPath string) (App, tea.Cmd) {
+func (m App) restartIdleCmd(cfg account.Account, folderPath string) (App, tea.Cmd) {
 	if m.idleAccount == cfg.Slug && m.idleFolder == folderPath && m.idleCancel != nil {
 		return m, nil
 	}
