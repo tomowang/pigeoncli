@@ -1,6 +1,3 @@
-// Package settings exposes user-facing preferences (background sync
-// interval, theme) read from the config file, as a core service so
-// internal/tui can consume them without importing internal/config directly.
 package settings
 
 import (
