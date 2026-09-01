@@ -243,6 +243,17 @@ func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs 
 	return tx.Commit()
 }
 
+// DeleteMessage removes one cached message — used after a successful
+// server-side move (e.g. to the Junk folder) so the source folder's cache
+// stops showing a message that no longer lives there. The destination
+// folder picks it up on its next sync.
+func (db *DB) DeleteMessage(ctx context.Context, folderID int64, uid uint32) error {
+	if _, err := db.ExecContext(ctx, "DELETE FROM messages WHERE folder_id = ? AND uid = ?", folderID, uid); err != nil {
+		return fmt.Errorf("delete message uid=%d: %w", uid, err)
+	}
+	return nil
+}
+
 // formatDate renders t for storage in the messages.date column. SQLite has
 // no native datetime type, and the sqlite driver's default string
 // conversion (time.Time.String) isn't reliably parseable back (e.g. a

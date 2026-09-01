@@ -64,6 +64,21 @@ func (db *DB) FolderID(ctx context.Context, accountID int64, path string) (int64
 	return id, true, nil
 }
 
+// FolderBySpecialUse looks up the path of accountID's folder tagged with the
+// given RFC 6154 special-use attribute (e.g. `\Junk`). It reports false if
+// no synced folder carries that attribute — not every IMAP server
+// advertises SPECIAL-USE, or names a Junk folder at all.
+func (db *DB) FolderBySpecialUse(ctx context.Context, accountID int64, specialUse string) (path string, ok bool, err error) {
+	err = db.QueryRowContext(ctx, "SELECT path FROM folders WHERE account_id = ? AND special_use = ?", accountID, specialUse).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("load folder for special-use %q: %w", specialUse, err)
+	}
+	return path, true, nil
+}
+
 // ListFolders returns all folders for accountID, ordered by path.
 func (db *DB) ListFolders(ctx context.Context, accountID int64) ([]FolderRow, error) {
 	rows, err := db.QueryContext(ctx, `

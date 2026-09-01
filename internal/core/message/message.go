@@ -2,6 +2,7 @@ package message
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -16,6 +17,21 @@ import (
 
 // seenFlag is the IMAP flag marking a message as read.
 const seenFlag = `\Seen`
+
+// junkSpecialUse and inboxSpecialUse are the RFC 6154 special-use
+// attributes identifying an account's Junk/Spam and Inbox folders.
+const (
+	junkSpecialUse  = `\Junk`
+	inboxSpecialUse = `\Inbox`
+)
+
+// ErrNoJunkFolder is returned by MoveToJunk when the account has no synced
+// folder tagged \Junk — not every IMAP server advertises a Junk folder.
+var ErrNoJunkFolder = errors.New("account has no Junk folder")
+
+// ErrNoInboxFolder is returned by MoveToInbox when the account has no
+// synced folder tagged \Inbox.
+var ErrNoInboxFolder = errors.New("account has no Inbox folder")
 
 // listLimit caps how many cached messages List returns per folder. Full
 // pagination/infinite-scroll is deferred; at personal-mailbox scale, the
@@ -345,6 +361,67 @@ func (s *Service) markSeen(ctx context.Context, cfg config.Account, folderPath s
 
 	if err := s.db.UpdateMessageFlags(ctx, folderID, map[uint32][]string{uid: append(flags, seenFlag)}); err != nil {
 		return fmt.Errorf("cache seen flag: %w", err)
+	}
+	return nil
+}
+
+// MoveToJunk moves the message at uid in folderPath to the account's
+// server-designated Junk folder (RFC 6154 special-use \Junk) — the same
+// move-based mechanism general mail clients use for "report spam".
+func (s *Service) MoveToJunk(ctx context.Context, cfg config.Account, folderPath string, uid uint32) error {
+	return s.moveToSpecialUse(ctx, cfg, folderPath, uid, junkSpecialUse, "the Junk folder", ErrNoJunkFolder)
+}
+
+// MoveToInbox moves the message at uid in folderPath back to the account's
+// Inbox (RFC 6154 special-use \Inbox) — the "not spam" counterpart to
+// MoveToJunk, for undoing a mistaken spam report.
+func (s *Service) MoveToInbox(ctx context.Context, cfg config.Account, folderPath string, uid uint32) error {
+	return s.moveToSpecialUse(ctx, cfg, folderPath, uid, inboxSpecialUse, "the Inbox", ErrNoInboxFolder)
+}
+
+// moveToSpecialUse moves the message at uid in folderPath to the account's
+// folder tagged with destSpecialUse (RFC 6154): a MOVE (or COPY + STORE
+// \Deleted + EXPUNGE fallback) on the server, then dropping the local cache
+// row for the source folder, since the message no longer lives there — the
+// destination folder picks it up on its next sync. destLabel names the
+// destination folder for the "already there" error message; errNoFolder is
+// returned if the account has no synced folder carrying destSpecialUse.
+func (s *Service) moveToSpecialUse(ctx context.Context, cfg config.Account, folderPath string, uid uint32, destSpecialUse, destLabel string, errNoFolder error) error {
+	accountID, folderID, err := s.resolveIDs(ctx, cfg.Slug, folderPath)
+	if err != nil {
+		return err
+	}
+	destPath, ok, err := s.db.FolderBySpecialUse(ctx, accountID, destSpecialUse)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errNoFolder
+	}
+	if destPath == folderPath {
+		return fmt.Errorf("message is already in %s", destLabel)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
+	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer func() { _ = cl.Close() }()
+	defer cl.WatchContext(ctx)()
+
+	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
+		return fmt.Errorf("select %q: %w", folderPath, err)
+	}
+	if err := cl.MoveToFolder(ctx, uid, destPath); err != nil {
+		return err
+	}
+
+	if err := s.db.DeleteMessage(ctx, folderID, uid); err != nil {
+		return fmt.Errorf("update local cache: %w", err)
 	}
 	return nil
 }

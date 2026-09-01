@@ -2,6 +2,7 @@ package message
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,5 +235,80 @@ func TestBodyReturnsCachedRawWithoutNetwork(t *testing.T) {
 	}
 	if !strings.Contains(body.PlainText, "Hello there.") {
 		t.Fatalf("unexpected plain text: %q", body.PlainText)
+	}
+}
+
+func TestMoveToJunkWithNoJunkFolderErrors(t *testing.T) {
+	ctx := context.Background()
+	svc, db, accountID, folderID := newTestService(t)
+
+	if err := db.UpsertMessageHeaders(ctx, accountID, folderID, []sqlite.MessageHeader{{UID: 1, Subject: "Hi"}}); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	err := svc.MoveToJunk(ctx, cfg, "INBOX", 1)
+	if !errors.Is(err, ErrNoJunkFolder) {
+		t.Fatalf("expected ErrNoJunkFolder, got %v", err)
+	}
+}
+
+func TestMoveToJunkAlreadyInJunkErrors(t *testing.T) {
+	ctx := context.Background()
+	svc, db, accountID, _ := newTestService(t)
+
+	junkID, err := db.UpsertFolder(ctx, accountID, "Junk", "Junk", "/", `\Junk`)
+	if err != nil {
+		t.Fatalf("UpsertFolder Junk: %v", err)
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, junkID, []sqlite.MessageHeader{{UID: 1, Subject: "Hi"}}); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	if err := svc.MoveToJunk(ctx, cfg, "Junk", 1); err == nil {
+		t.Fatalf("expected error moving a message already in the Junk folder")
+	}
+}
+
+func TestMoveToInboxWithNoInboxFolderErrors(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := sqlite.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	accountID, err := db.UpsertAccount(ctx, "work", "me@example.com", "Work")
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+	svc := NewService(db, blob.NewStore(t.TempDir()))
+
+	junkID, err := db.UpsertFolder(ctx, accountID, "Junk", "Junk", "/", `\Junk`)
+	if err != nil {
+		t.Fatalf("UpsertFolder Junk: %v", err)
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, junkID, []sqlite.MessageHeader{{UID: 1, Subject: "Hi"}}); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	if err := svc.MoveToInbox(ctx, cfg, "Junk", 1); !errors.Is(err, ErrNoInboxFolder) {
+		t.Fatalf("expected ErrNoInboxFolder, got %v", err)
+	}
+}
+
+func TestMoveToInboxAlreadyInInboxErrors(t *testing.T) {
+	ctx := context.Background()
+	svc, db, accountID, folderID := newTestService(t)
+
+	if err := db.UpsertMessageHeaders(ctx, accountID, folderID, []sqlite.MessageHeader{{UID: 1, Subject: "Hi"}}); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	if err := svc.MoveToInbox(ctx, cfg, "INBOX", 1); err == nil {
+		t.Fatalf("expected error moving a message already in the Inbox")
 	}
 }

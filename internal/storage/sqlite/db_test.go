@@ -209,3 +209,47 @@ func TestFolderIDAndMessageBodyState(t *testing.T) {
 		t.Fatalf("expected cached body state, got ref=%q synced=%v", ref, synced)
 	}
 }
+
+func TestFolderBySpecialUseAndDeleteMessage(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	accountID, err := db.UpsertAccount(ctx, "work", "me@example.com", "Work")
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+
+	if _, ok, err := db.FolderBySpecialUse(ctx, accountID, `\Junk`); err != nil || ok {
+		t.Fatalf("FolderBySpecialUse before sync: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	inboxID, err := db.UpsertFolder(ctx, accountID, "INBOX", "INBOX", "/", `\Inbox`)
+	if err != nil {
+		t.Fatalf("UpsertFolder INBOX: %v", err)
+	}
+	if _, err := db.UpsertFolder(ctx, accountID, "Junk", "Junk", "/", `\Junk`); err != nil {
+		t.Fatalf("UpsertFolder Junk: %v", err)
+	}
+
+	path, ok, err := db.FolderBySpecialUse(ctx, accountID, `\Junk`)
+	if err != nil || !ok || path != "Junk" {
+		t.Fatalf("FolderBySpecialUse: got path=%q ok=%v err=%v, want path=Junk ok=true", path, ok, err)
+	}
+
+	headers := []MessageHeader{
+		{UID: 1, Subject: "Hello", FromAddr: "a@example.com", Date: time.Now(), Flags: nil},
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, inboxID, headers); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+	if err := db.DeleteMessage(ctx, inboxID, 1); err != nil {
+		t.Fatalf("DeleteMessage: %v", err)
+	}
+	msgs, err := db.ListMessages(ctx, inboxID, 10)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected message removed after DeleteMessage, got %+v", msgs)
+	}
+}

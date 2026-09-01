@@ -326,6 +326,18 @@ func (cl *Client) FetchRawBody(ctx context.Context, uid uint32) ([]byte, error) 
 	return bufs[0].BodySection[0].Bytes, nil
 }
 
+// MoveToFolder moves the given UID from the currently selected mailbox to
+// destPath, using the server's MOVE extension (RFC 6851) when available and
+// transparently falling back to COPY + STORE \Deleted + EXPUNGE otherwise
+// (see imapclient.Client.Move).
+func (cl *Client) MoveToFolder(ctx context.Context, uid uint32, destPath string) error {
+	uidSet := imap.UIDSetNum(imap.UID(uid))
+	if _, err := cl.c.Move(uidSet, destPath).Wait(); err != nil {
+		return fmt.Errorf("move uid=%d to %q: %w", uid, destPath, err)
+	}
+	return nil
+}
+
 // MarkSeen sets the \Seen flag on the given UID in the currently selected
 // mailbox, telling the server the message has been read.
 func (cl *Client) MarkSeen(ctx context.Context, uid uint32) error {

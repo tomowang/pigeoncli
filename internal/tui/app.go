@@ -225,6 +225,14 @@ type sendResultMsg struct {
 	err error
 }
 
+// moveMessageResultMsg reports the outcome of moveToJunkCmd/moveToInboxCmd.
+// toJunk distinguishes which direction happened, for status text/logging.
+type moveMessageResultMsg struct {
+	folderPath string
+	toJunk     bool
+	err        error
+}
+
 func (m App) loadAccountsCmd() tea.Cmd {
 	return func() tea.Msg {
 		accounts, err := m.accountSvc.List(m.ctx)
@@ -253,6 +261,47 @@ func (m App) openMessageCmd(msg message.Message) tea.Cmd {
 		body, err := m.messageSvc.Body(m.ctx, cfg, folderPath, msg.UID)
 		return messageBodyLoadedMsg{msg: msg, body: body, err: err}
 	}
+}
+
+func (m App) moveToJunkCmd(uid uint32) tea.Cmd {
+	cfg := m.selectedAccount
+	folderPath := m.selectedFolder
+	return func() tea.Msg {
+		err := m.messageSvc.MoveToJunk(m.ctx, cfg, folderPath, uid)
+		return moveMessageResultMsg{folderPath: folderPath, toJunk: true, err: err}
+	}
+}
+
+func (m App) moveToInboxCmd(uid uint32) tea.Cmd {
+	cfg := m.selectedAccount
+	folderPath := m.selectedFolder
+	return func() tea.Msg {
+		err := m.messageSvc.MoveToInbox(m.ctx, cfg, folderPath, uid)
+		return moveMessageResultMsg{folderPath: folderPath, toJunk: false, err: err}
+	}
+}
+
+// currentFolderSpecialUse returns the RFC 6154 special-use attribute of the
+// currently selected folder (e.g. `\Junk`), or "" if unknown/none — used to
+// make the "!" key context-sensitive (report spam vs. undo a spam report).
+func (m App) currentFolderSpecialUse() string {
+	for _, it := range m.folders.Items() {
+		if f, ok := it.(folderItem); ok && f.Path == m.selectedFolder {
+			return f.SpecialUse
+		}
+	}
+	return ""
+}
+
+// toggleSpamCmd picks the spam direction based on the currently selected
+// folder: moving to Junk from anywhere else, or back to the Inbox when
+// already viewing Junk. It returns the busy-status text to show alongside
+// the resulting tea.Cmd.
+func (m App) toggleSpamCmd(uid uint32) (busyText string, cmd tea.Cmd) {
+	if m.currentFolderSpecialUse() == `\Junk` {
+		return "Marking as not spam...", m.moveToInboxCmd(uid)
+	}
+	return "Marking as spam...", m.moveToJunkCmd(uid)
 }
 
 func (m App) Init() tea.Cmd {
@@ -422,6 +471,31 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Service.Send already refreshed the sqlite cache (e.g. a Sent
 		// copy); reload folders so this pane's counts reflect that too.
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
+
+	case moveMessageResultMsg:
+		m = m.stopBusy()
+		verb := "mark as spam"
+		successText := "Marked as spam."
+		if !msg.toJunk {
+			verb = "mark as not spam"
+			successText = "Marked as not spam."
+		}
+		if msg.err != nil {
+			slog.Error(verb+" failed", "folder", msg.folderPath, "err", msg.err)
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("%s: %v", verb, msg.err), sevError)
+			return m, cmd
+		}
+		slog.Info("message moved", "folder", msg.folderPath, "toJunk", msg.toJunk)
+		m.viewingMsg = nil
+		m.layout()
+		var cmd tea.Cmd
+		m, cmd = m.setStatus(successText, sevSuccess)
+		return m, tea.Batch(
+			cmd,
+			m.loadMessagesCmd(m.selectedAccount.Slug, m.selectedFolder),
+			m.loadFoldersCmd(m.selectedAccount.Slug),
+		)
 
 	case accountAddedMsg:
 		if msg.err != nil {
@@ -678,6 +752,18 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m, cmd = m.setStatus("Syncing...", sevInfo)
 			return m, tea.Batch(cmd, m.startSyncCmd(m.selectedAccount, ch), listenSyncProgressCmd(ch), m.syncSpinner.Tick)
+		case "!":
+			if m.focus != focusMessages {
+				return m, nil
+			}
+			item, ok := m.messages.SelectedItem().(messageItem)
+			if !ok {
+				return m, nil
+			}
+			busyText, mvCmd := m.toggleSpamCmd(item.UID)
+			var cmd tea.Cmd
+			m, cmd = m.startBusy(busyText)
+			return m, tea.Batch(cmd, mvCmd)
 		}
 	}
 
@@ -757,6 +843,14 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		default:
 			return m.beginAttachmentPicker(), nil
 		}
+	case "!":
+		if m.viewingMsg == nil {
+			return m, nil
+		}
+		busyText, mvCmd := m.toggleSpamCmd(m.viewingMsg.UID)
+		var cmd tea.Cmd
+		m, cmd = m.startBusy(busyText)
+		return m, tea.Batch(cmd, mvCmd)
 	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -931,9 +1025,9 @@ func (m App) shortcutsLine() string {
 		if m.viewingRaw {
 			mode = "raw"
 		}
-		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · esc: back · q: quit", mode)
+		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · !: spam · esc: back · q: quit", mode)
 	}
-	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · ?: help · L: log · q: quit"
+	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · !: spam · ?: help · L: log · q: quit"
 }
 
 // statusBarText returns what the status bar (the row above shortcuts) should
@@ -997,6 +1091,7 @@ var helpSections = []helpSection{
 			{"c", "compose a new message"},
 			{"s", "sync the selected account (also runs automatically in the background)"},
 			{"/", "search subject/from/to/cc for the selected account"},
+			{"!", "mark as spam (move to Junk); in the Junk folder, moves back to the Inbox instead"},
 			{"?", "toggle this help"},
 			{"L", "toggle the status log"},
 			{"q / ctrl+c", "quit (asks to confirm)"},

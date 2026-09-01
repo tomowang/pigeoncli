@@ -21,10 +21,17 @@ type folderItem folder.Folder
 func (f folderItem) FilterValue() string { return f.Path }
 
 func (f folderItem) Title() string {
-	if f.UnreadCount > 0 {
-		return fmt.Sprintf("%s (%d)", f.Name, f.UnreadCount)
+	title := f.Name
+	// The server's folder name doesn't always make its purpose obvious
+	// (e.g. Gmail's "[Gmail]/Bulk Mail"), so a recognized Junk folder is
+	// tagged regardless of what it's actually called.
+	if f.SpecialUse == `\Junk` {
+		title = "⚠ " + title
 	}
-	return f.Name
+	if f.UnreadCount > 0 {
+		title = fmt.Sprintf("%s (%d)", title, f.UnreadCount)
+	}
+	return title
 }
 
 func (f folderItem) Description() string {
