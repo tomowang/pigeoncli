@@ -85,6 +85,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newAccountCmd())
 	cmd.AddCommand(newSyncCmd())
 	cmd.AddCommand(newSignatureCmd())
+	cmd.AddCommand(newMessageCmd())
 
 	return cmd
 }
