@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/tomowang/pigeoncli/internal/config"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 )
 
@@ -21,6 +23,8 @@ func newMessageCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newMessageListCmd())
 	cmd.AddCommand(newMessageShowCmd())
+	cmd.AddCommand(newMessageSpamCmd())
+	cmd.AddCommand(newMessageUnspamCmd())
 	return cmd
 }
 
@@ -146,6 +150,63 @@ func newMessageShowCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&folderPath, "folder", defaultListFolder, "folder the message lives in")
+	return cmd
+}
+
+func newMessageSpamCmd() *cobra.Command {
+	return newMessageMoveCmd("spam", "Report a message as spam, moving it to the account's Junk folder",
+		func(ctx context.Context, svc *message.Service, cfg config.Account, folderPath string, uid uint32) error {
+			return svc.MoveToJunk(ctx, cfg, folderPath, uid)
+		})
+}
+
+func newMessageUnspamCmd() *cobra.Command {
+	return newMessageMoveCmd("unspam", "Undo a spam report, moving a message back to the account's Inbox",
+		func(ctx context.Context, svc *message.Service, cfg config.Account, folderPath string, uid uint32) error {
+			return svc.MoveToInbox(ctx, cfg, folderPath, uid)
+		})
+}
+
+// newMessageMoveCmd builds a `message <use> <slug> <uid>` command that moves
+// one message via action — the shared shape of `spam`/`unspam`, which only
+// differ in which core/message.Service method they call.
+func newMessageMoveCmd(use, short string, action func(ctx context.Context, svc *message.Service, cfg config.Account, folderPath string, uid uint32) error) *cobra.Command {
+	var folderPath string
+	cmd := &cobra.Command{
+		Use:   use + " <slug> <uid>",
+		Short: short,
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slug := args[0]
+			uid64, err := strconv.ParseUint(args[1], 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid uid %q: %w", args[1], err)
+			}
+			uid := uint32(uid64)
+
+			acctSvc, err := newAccountService()
+			if err != nil {
+				return err
+			}
+			cfg, err := acctSvc.Get(cmd.Context(), slug)
+			if err != nil {
+				return err
+			}
+
+			st, err := openStore(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+
+			if err := action(cmd.Context(), st.Message, cfg, folderPath, uid); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Message %d moved.\n", uid)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&folderPath, "folder", defaultListFolder, "folder the message currently lives in")
 	return cmd
 }
 
