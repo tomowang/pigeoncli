@@ -86,6 +86,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newSyncCmd())
 	cmd.AddCommand(newSignatureCmd())
 	cmd.AddCommand(newMessageCmd())
+	cmd.AddCommand(newFolderCmd())
 
 	return cmd
 }
