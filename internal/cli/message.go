@@ -26,6 +26,7 @@ func newMessageCmd() *cobra.Command {
 	cmd.AddCommand(newMessageSearchCmd())
 	cmd.AddCommand(newMessageSpamCmd())
 	cmd.AddCommand(newMessageUnspamCmd())
+	cmd.AddCommand(newMessageAttachmentCmd())
 	return cmd
 }
 
@@ -254,6 +255,61 @@ func newMessageMoveCmd(use, short string, action func(ctx context.Context, svc *
 		},
 	}
 	cmd.Flags().StringVar(&folderPath, "folder", defaultListFolder, "folder the message currently lives in")
+	return cmd
+}
+
+func newMessageAttachmentCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "attachment",
+		Short: "Save a message's attachments",
+	}
+	cmd.AddCommand(newMessageAttachmentSaveCmd())
+	return cmd
+}
+
+func newMessageAttachmentSaveCmd() *cobra.Command {
+	var folderPath string
+	cmd := &cobra.Command{
+		Use:   "save <slug> <uid> <index> <dest-path>",
+		Short: "Save one of a message's attachments to disk",
+		Long:  "Save one of a message's attachments to disk. Use `message show` first to see an attachment's index.",
+		Args:  cobra.ExactArgs(4),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slug := args[0]
+			uid64, err := strconv.ParseUint(args[1], 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid uid %q: %w", args[1], err)
+			}
+			uid := uint32(uid64)
+			index, err := strconv.Atoi(args[2])
+			if err != nil {
+				return fmt.Errorf("invalid index %q: %w", args[2], err)
+			}
+			destPath := args[3]
+
+			acctSvc, err := newAccountService()
+			if err != nil {
+				return err
+			}
+			cfg, err := acctSvc.Get(cmd.Context(), slug)
+			if err != nil {
+				return err
+			}
+
+			st, err := openStore(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+
+			if err := st.Message.SaveAttachment(cmd.Context(), cfg, folderPath, uid, index, destPath); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Attachment saved to %s.\n", destPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&folderPath, "folder", defaultListFolder, "folder the message lives in")
 	return cmd
 }
 
