@@ -23,6 +23,7 @@ func newMessageCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newMessageListCmd())
 	cmd.AddCommand(newMessageShowCmd())
+	cmd.AddCommand(newMessageSearchCmd())
 	cmd.AddCommand(newMessageSpamCmd())
 	cmd.AddCommand(newMessageUnspamCmd())
 	return cmd
@@ -151,6 +152,52 @@ func newMessageShowCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&folderPath, "folder", defaultListFolder, "folder the message lives in")
 	return cmd
+}
+
+func newMessageSearchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "search <slug> <query>",
+		Short: "Full-text search a synced account's message headers",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slug, query := args[0], args[1]
+
+			acctSvc, err := newAccountService()
+			if err != nil {
+				return err
+			}
+			if _, err := acctSvc.Get(cmd.Context(), slug); err != nil {
+				return err
+			}
+
+			st, err := openStore(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+
+			results, err := st.Message.Search(cmd.Context(), slug, query)
+			if err != nil {
+				return err
+			}
+			if len(results) == 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No messages match %q.\n", query)
+				return nil
+			}
+
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "UID\tFOLDER\tFLAGS\tFROM\tSUBJECT\tDATE")
+			for _, r := range results {
+				from := r.FromAddr
+				if r.FromName != "" {
+					from = r.FromName
+				}
+				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
+					r.UID, r.FolderPath, formatFlags(r.Flags), from, r.Subject, r.Date.Format("2006-01-02 15:04"))
+			}
+			return w.Flush()
+		},
+	}
 }
 
 func newMessageSpamCmd() *cobra.Command {
