@@ -3,9 +3,9 @@
 pigeon is a local email client for the terminal, built on
 [bubbletea](https://github.com/charmbracelet/bubbletea). It syncs IMAP
 mailboxes into a local SQLite cache so browsing works offline, and sends
-mail over SMTP. A CLI covers account setup, sync, and signatures; a
-TUI covers day-to-day reading and composing. An HTTP API is planned as a
-third frontend.
+mail over SMTP. A CLI covers account setup, sync, signatures, reading,
+searching, composing, and replying; a TUI covers day-to-day reading and
+composing. An HTTP API is planned as a third frontend.
 
 ## Status
 
@@ -66,6 +66,18 @@ pigeon signature list            # list signatures (--account to filter)
 pigeon signature edit <id>       # edit a signature's name/body
 pigeon signature remove <id>     # remove a signature
 pigeon signature set-default <id> # make a signature the default in its scope
+
+pigeon message list <slug> [folder]        # list cached messages (default folder: INBOX)
+pigeon message show <slug> <uid>           # show a message's headers and body (--folder)
+pigeon message search <slug> <query>       # full-text search a synced account's headers
+pigeon message spam <slug> <uid>           # report a message as spam (moves to Junk)
+pigeon message unspam <slug> <uid>         # undo a spam report (moves back to Inbox)
+pigeon message attachment save <slug> <uid> <index> <dest-path>  # save an attachment to disk
+
+pigeon folder list <slug>        # list an account's synced folders
+
+pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --subject, --body)
+pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body)
 ```
 
 Global flags (any subcommand): `--config`, `--db`, `--blobs`, `--log-level`,
