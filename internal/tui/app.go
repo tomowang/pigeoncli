@@ -27,6 +27,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
+	"github.com/tomowang/pigeoncli/internal/logo"
 )
 
 type focusPane int
@@ -1129,7 +1130,7 @@ var helpSections = []helpSection{
 }
 
 func (m App) viewHelp() string {
-	lines := []string{"pigeon — keybindings", ""}
+	lines := append(strings.Split(logo.Banner(), "\n"), "", "pigeon — keybindings", "")
 	for _, section := range helpSections {
 		lines = append(lines, section.Title)
 		for _, row := range section.Rows {

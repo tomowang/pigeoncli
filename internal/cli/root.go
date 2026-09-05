@@ -11,6 +11,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
 	"github.com/tomowang/pigeoncli/internal/logging"
+	"github.com/tomowang/pigeoncli/internal/logo"
 	"github.com/tomowang/pigeoncli/internal/tui"
 )
 
@@ -28,7 +29,7 @@ func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pigeon",
 		Short: "pigeon is a local email client (TUI/CLI)",
-		Long:  "pigeon is a local email client with IMAP/SMTP support, a terminal UI, and a CLI.",
+		Long:  logo.Banner() + "\n\npigeon is a local email client with IMAP/SMTP support, a terminal UI, and a CLI.",
 		// main.go prints the returned error itself; don't let cobra print it
 		// a second time or dump usage for runtime (non-flag-parsing) errors.
 		SilenceErrors: true,
