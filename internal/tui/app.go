@@ -135,11 +135,12 @@ type App struct {
 	saveAttachmentInput textinput.Model
 	pendingAttachment   message.Attachment
 
-	addingAccount     bool
-	accountForm       [accountFieldCount]textinput.Model
-	accountFormField  accountFormField
-	accountIMAPTLSIdx int
-	accountSMTPTLSIdx int
+	addingAccount      bool
+	accountForm        [accountFieldCount]textinput.Model
+	accountFormField   accountFormField
+	accountIMAPTLSIdx  int
+	accountSMTPTLSIdx  int
+	accountAuthTypeIdx int
 }
 
 func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
@@ -510,6 +511,11 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m, cmd = m.setStatus(fmt.Sprintf("Account %q added.", msg.slug), sevSuccess)
 		return m, tea.Batch(cmd, m.loadAccountsCmd())
+
+	case googleAuthURLMsg:
+		var cmd tea.Cmd
+		m, cmd = m.setStatus(fmt.Sprintf("Sign in with Google in your browser. If it didn't open, visit: %s", msg.url), sevInfo)
+		return m, cmd
 
 	case settingsLoadedMsg:
 		if msg.err != nil {

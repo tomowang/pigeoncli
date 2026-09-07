@@ -140,7 +140,10 @@ func (s *Service) Send(ctx context.Context, cfg config.Account, draft Draft) err
 		return fmt.Errorf("build message: %w", err)
 	}
 
-	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
+	if err != nil {
+		return err
+	}
 	opts := smtp.DialOptions{Host: cfg.SMTP.Host, Port: cfg.SMTP.Port, TLS: cfg.SMTP.TLS}
 	allRecipients := append(append([]string{}, draft.To...), draft.Cc...)
 	if err := smtp.Send(ctx, opts, provider, cfg.Email, allRecipients, raw); err != nil {

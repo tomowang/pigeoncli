@@ -85,10 +85,15 @@ func (f *serverFlags) register(cmd *cobra.Command, defaultPorts bool) {
 
 func newAccountAddCmd() *cobra.Command {
 	var f serverFlags
+	var google bool
 	cmd := &cobra.Command{
 		Use:   "add <slug>",
 		Short: "Add a new mail account",
-		Args:  cobra.ExactArgs(1),
+		Long: "Add a new mail account.\n\n" +
+			"With --google, pigeon authenticates via Google OAuth2 (opening a\n" +
+			"browser for sign-in) instead of prompting for a password, and\n" +
+			"defaults the IMAP/SMTP host to Gmail's servers.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug := args[0]
 			username := f.username
@@ -96,21 +101,27 @@ func newAccountAddCmd() *cobra.Command {
 				username = f.email
 			}
 
+			imapCfg := account.ServerConfig{Host: f.imapHost, Port: f.imapPort, TLS: account.TLSMode(f.imapTLS)}
+			smtpCfg := account.ServerConfig{Host: f.smtpHost, Port: f.smtpPort, TLS: account.TLSMode(f.smtpTLS)}
+			if google {
+				gmailIMAP, gmailSMTP := account.GmailServerConfig()
+				if !cmd.Flags().Changed("imap-host") {
+					imapCfg.Host = gmailIMAP.Host
+				}
+				if !cmd.Flags().Changed("smtp-host") {
+					smtpCfg.Host = gmailSMTP.Host
+				}
+			}
+
 			a := account.Account{
 				Slug:        slug,
 				Email:       f.email,
 				DisplayName: f.displayName,
 				Username:    username,
-				AuthType:    "password",
-				IMAP:        account.ServerConfig{Host: f.imapHost, Port: f.imapPort, TLS: account.TLSMode(f.imapTLS)},
-				SMTP:        account.ServerConfig{Host: f.smtpHost, Port: f.smtpPort, TLS: account.TLSMode(f.smtpTLS)},
+				IMAP:        imapCfg,
+				SMTP:        smtpCfg,
 			}
 			if err := account.Validate(a); err != nil {
-				return err
-			}
-
-			password, err := promptPassword(fmt.Sprintf("Password for %s: ", slug))
-			if err != nil {
 				return err
 			}
 
@@ -118,8 +129,27 @@ func newAccountAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := svc.Add(cmd.Context(), a, password); err != nil {
-				return err
+
+			if google {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Opening your browser to sign in with Google...")
+				token, err := svc.AuthorizeGoogle(cmd.Context(), func(url string) {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "If it doesn't open automatically, visit:\n%s\n\n", url)
+				})
+				if err != nil {
+					return fmt.Errorf("google sign-in: %w", err)
+				}
+				if err := svc.AddGoogle(cmd.Context(), a, token); err != nil {
+					return err
+				}
+			} else {
+				a.AuthType = account.AuthTypePassword
+				password, err := promptPassword(fmt.Sprintf("Password for %s: ", slug))
+				if err != nil {
+					return err
+				}
+				if err := svc.Add(cmd.Context(), a, password); err != nil {
+					return err
+				}
 			}
 
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Account %q added.\n", slug)
@@ -127,15 +157,15 @@ func newAccountAddCmd() *cobra.Command {
 		},
 	}
 	f.register(cmd, true)
+	cmd.Flags().BoolVar(&google, "google", false, "sign in with Google OAuth2 (for Gmail) instead of a password")
 	_ = cmd.MarkFlagRequired("email")
-	_ = cmd.MarkFlagRequired("imap-host")
-	_ = cmd.MarkFlagRequired("smtp-host")
 	return cmd
 }
 
 func newAccountEditCmd() *cobra.Command {
 	var f serverFlags
 	var resetPassword bool
+	var reauthGoogle bool
 	cmd := &cobra.Command{
 		Use:   "edit <slug>",
 		Short: "Edit an existing mail account",
@@ -196,12 +226,26 @@ func newAccountEditCmd() *cobra.Command {
 				return err
 			}
 
+			if reauthGoogle {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Opening your browser to sign in with Google...")
+				token, err := svc.AuthorizeGoogle(cmd.Context(), func(url string) {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "If it doesn't open automatically, visit:\n%s\n\n", url)
+				})
+				if err != nil {
+					return fmt.Errorf("google sign-in: %w", err)
+				}
+				if err := svc.ReauthorizeGoogle(cmd.Context(), slug, token); err != nil {
+					return err
+				}
+			}
+
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Account %q updated.\n", slug)
 			return nil
 		},
 	}
 	f.register(cmd, false)
 	cmd.Flags().BoolVar(&resetPassword, "password", false, "prompt for a new password")
+	cmd.Flags().BoolVar(&reauthGoogle, "reauth-google", false, "re-run Google sign-in for a google-auth account (e.g. after its access was revoked)")
 	return cmd
 }
 
@@ -225,10 +269,14 @@ func newAccountListCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "SLUG\tEMAIL\tIMAP\tSMTP")
+			_, _ = fmt.Fprintln(w, "SLUG\tEMAIL\tAUTH\tIMAP\tSMTP")
 			for _, a := range accounts {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s:%d (%s)\n",
-					a.Slug, a.Email, a.IMAP.Host, a.IMAP.Port, a.IMAP.TLS, a.SMTP.Host, a.SMTP.Port, a.SMTP.TLS)
+				authType := a.AuthType
+				if authType == "" {
+					authType = account.AuthTypePassword
+				}
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s:%d (%s)\t%s:%d (%s)\n",
+					a.Slug, a.Email, authType, a.IMAP.Host, a.IMAP.Port, a.IMAP.TLS, a.SMTP.Host, a.SMTP.Port, a.SMTP.TLS)
 			}
 			return w.Flush()
 		},

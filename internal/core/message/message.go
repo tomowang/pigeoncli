@@ -309,7 +309,10 @@ func (s *Service) fetchRaw(ctx context.Context, cfg config.Account, folderPath s
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
+	if err != nil {
+		return nil, err
+	}
 	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
@@ -344,7 +347,10 @@ func (s *Service) markSeen(ctx context.Context, cfg config.Account, folderPath s
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
+	if err != nil {
+		return err
+	}
 	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -405,7 +411,10 @@ func (s *Service) moveToSpecialUse(ctx context.Context, cfg config.Account, fold
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
+	if err != nil {
+		return err
+	}
 	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)

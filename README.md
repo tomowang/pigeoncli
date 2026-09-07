@@ -46,6 +46,24 @@ Passwords are never written to disk in plaintext — they're stored via the
 OS keyring (`internal/auth`). Connection settings (host, port, TLS,
 username) live in a TOML config file.
 
+### Gmail
+
+Gmail accounts sign in with Google OAuth2 instead of a password:
+
+```
+pigeon account add personal --email you@gmail.com --google
+# opens your browser to sign in with Google; IMAP/SMTP default to Gmail's servers
+
+pigeon account test personal
+pigeon sync personal
+```
+
+The OAuth2 token (not a password) is stored in the OS keyring; pigeon
+refreshes it automatically. If Google revokes access (e.g. after months of
+inactivity), re-run sign-in with `pigeon account edit personal
+--reauth-google`. In the TUI, pick "Google" under Sign in with on the add-
+account form instead of entering a password.
+
 ## CLI
 
 ```
@@ -53,7 +71,9 @@ pigeon                          # launch the TUI (default, no subcommand)
 pigeon version                  # print build info
 
 pigeon account add <slug>       # add an account (prompts for password)
+pigeon account add <slug> --google           # add a Gmail account via Google OAuth2 sign-in
 pigeon account edit <slug>      # edit an account's settings
+pigeon account edit <slug> --reauth-google   # re-run Google sign-in for a google-auth account
 pigeon account list             # list configured accounts
 pigeon account remove <slug>    # remove an account
 pigeon account test <slug>      # test IMAP/SMTP connectivity

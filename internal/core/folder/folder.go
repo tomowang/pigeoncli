@@ -63,7 +63,10 @@ func (s *Service) List(ctx context.Context, accountSlug string) ([]Folder, error
 // windowing, syncing full history); see internal/sync's doc comment for
 // details. If onProgress is non-nil, it's called once per folder.
 func (s *Service) Sync(ctx context.Context, cfg config.Account, windowCount int, onProgress func(Progress)) error {
-	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
+	if err != nil {
+		return err
+	}
 	a := sync.Account{
 		Slug:        cfg.Slug,
 		Email:       cfg.Email,
@@ -85,6 +88,9 @@ func (s *Service) Sync(ctx context.Context, cfg config.Account, windowCount int,
 // the connection dropped) and callers should fall back to polling rather
 // than retrying immediately.
 func (s *Service) Watch(ctx context.Context, cfg config.Account, folderPath string, onUpdate func()) error {
-	provider := auth.PasswordProvider{Username: cfg.Username, AccountSlug: cfg.Slug}
+	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
+	if err != nil {
+		return err
+	}
 	return sync.WatchFolder(ctx, cfg.IMAP, provider, folderPath, onUpdate)
 }
