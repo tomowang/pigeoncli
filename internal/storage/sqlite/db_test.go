@@ -253,3 +253,72 @@ func TestFolderBySpecialUseAndDeleteMessage(t *testing.T) {
 		t.Fatalf("expected message removed after DeleteMessage, got %+v", msgs)
 	}
 }
+
+func TestDeleteFoldersNotIn(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	accountID, err := db.UpsertAccount(ctx, "gmail", "me@gmail.com", "Gmail")
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+
+	inboxID, err := db.UpsertFolder(ctx, accountID, "INBOX", "INBOX", "/", `\Inbox`)
+	if err != nil {
+		t.Fatalf("UpsertFolder INBOX: %v", err)
+	}
+	staleID, err := db.UpsertFolder(ctx, accountID, "[Gmail]", "[Gmail]", "/", "")
+	if err != nil {
+		t.Fatalf("UpsertFolder [Gmail]: %v", err)
+	}
+	if err := db.UpsertMessageHeaders(ctx, accountID, staleID, []MessageHeader{
+		{UID: 1, Subject: "orphaned", FromAddr: "a@example.com", Date: time.Now()},
+	}); err != nil {
+		t.Fatalf("UpsertMessageHeaders: %v", err)
+	}
+
+	if err := db.DeleteFoldersNotIn(ctx, accountID, []string{"INBOX"}); err != nil {
+		t.Fatalf("DeleteFoldersNotIn: %v", err)
+	}
+
+	folders, err := db.ListFolders(ctx, accountID)
+	if err != nil {
+		t.Fatalf("ListFolders: %v", err)
+	}
+	if len(folders) != 1 || folders[0].ID != inboxID {
+		t.Fatalf("expected only INBOX to remain, got %+v", folders)
+	}
+
+	msgs, err := db.ListMessages(ctx, staleID, 10)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected stale folder's messages cascade-deleted, got %+v", msgs)
+	}
+}
+
+func TestDeleteFoldersNotInNoStaleFoldersIsNoop(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	accountID, err := db.UpsertAccount(ctx, "work", "me@example.com", "Work")
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+	if _, err := db.UpsertFolder(ctx, accountID, "INBOX", "INBOX", "/", `\Inbox`); err != nil {
+		t.Fatalf("UpsertFolder: %v", err)
+	}
+
+	if err := db.DeleteFoldersNotIn(ctx, accountID, []string{"INBOX"}); err != nil {
+		t.Fatalf("DeleteFoldersNotIn: %v", err)
+	}
+
+	folders, err := db.ListFolders(ctx, accountID)
+	if err != nil {
+		t.Fatalf("ListFolders: %v", err)
+	}
+	if len(folders) != 1 {
+		t.Fatalf("expected INBOX to remain, got %+v", folders)
+	}
+}

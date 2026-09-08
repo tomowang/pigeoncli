@@ -110,10 +110,17 @@ type Folder struct {
 	SpecialUse string // e.g. \Inbox, \Sent, \Drafts, \Trash, \Junk, \Archive — empty if none
 }
 
-// ListFolders lists all mailboxes, including special-use hints when the
-// server supports the SPECIAL-USE extension. INBOX is synthetically
-// tagged \Inbox, since RFC 6154 special-use attributes don't cover it
-// (INBOX is just a reserved mailbox name).
+// ListFolders lists all selectable mailboxes, including special-use hints
+// when the server supports the SPECIAL-USE extension. INBOX is
+// synthetically tagged \Inbox, since RFC 6154 special-use attributes don't
+// cover it (INBOX is just a reserved mailbox name).
+//
+// A mailbox flagged \Noselect or \NonExistent is skipped: it's a naming
+// placeholder for its children, not a mailbox that can hold messages of
+// its own. Gmail's "[Gmail]" parent is the common example — it exists only
+// so "[Gmail]/All Mail" etc. can nest under it, is reported with
+// \NonExistent (not \Noselect) in Gmail's LIST response, and errors with
+// "NONEXISTENT" if SELECTed directly.
 func (cl *Client) ListFolders(ctx context.Context) ([]Folder, error) {
 	data, err := cl.c.List("", "*", &imap.ListOptions{ReturnSpecialUse: true}).Collect()
 	if err != nil {
@@ -126,12 +133,18 @@ func (cl *Client) ListFolders(ctx context.Context) ([]Folder, error) {
 		if f.Path == "INBOX" {
 			f.SpecialUse = `\Inbox`
 		}
+		var unselectable bool
 		for _, attr := range d.Attrs {
 			switch attr {
 			case imap.MailboxAttrAll, imap.MailboxAttrArchive, imap.MailboxAttrDrafts, imap.MailboxAttrFlagged,
 				imap.MailboxAttrJunk, imap.MailboxAttrSent, imap.MailboxAttrTrash, imap.MailboxAttrImportant:
 				f.SpecialUse = string(attr)
+			case imap.MailboxAttrNoSelect, imap.MailboxAttrNonExistent:
+				unselectable = true
 			}
+		}
+		if unselectable {
+			continue
 		}
 		folders = append(folders, f)
 	}

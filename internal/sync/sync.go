@@ -88,6 +88,15 @@ func SyncAccount(ctx context.Context, db *sqlite.DB, a Account, onProgress func(
 		}
 	}
 
+	keepPaths := make([]string, len(remoteFolders))
+	for i, rf := range remoteFolders {
+		keepPaths[i] = rf.Path
+	}
+	if err := db.DeleteFoldersNotIn(ctx, accountID, keepPaths); err != nil {
+		slog.Error("reconcile removed folders failed", "account", a.Slug, "err", err)
+		return fmt.Errorf("reconcile removed folders: %w", err)
+	}
+
 	slog.Info("sync account complete", "account", a.Slug, "folders", len(remoteFolders))
 	return db.SetAccountSyncedNow(ctx, accountID)
 }

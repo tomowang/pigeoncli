@@ -142,3 +142,60 @@ func (db *DB) ClearFolderMessages(ctx context.Context, folderID int64) error {
 	}
 	return nil
 }
+
+// DeleteFoldersNotIn removes accountID's cached folders whose path isn't in
+// keepPaths — used to reconcile folders renamed, removed, or (as with
+// Gmail's "[Gmail]" parent) newly filtered out server-side since the last
+// sync. Cascades to that folder's cached messages via the messages table's
+// ON DELETE CASCADE foreign key.
+func (db *DB) DeleteFoldersNotIn(ctx context.Context, accountID int64, keepPaths []string) error {
+	keep := make(map[string]struct{}, len(keepPaths))
+	for _, p := range keepPaths {
+		keep[p] = struct{}{}
+	}
+
+	rows, err := db.QueryContext(ctx, "SELECT path FROM folders WHERE account_id = ?", accountID)
+	if err != nil {
+		return fmt.Errorf("list cached folder paths: %w", err)
+	}
+	var stale []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan cached folder path: %w", err)
+		}
+		if _, ok := keep[path]; !ok {
+			stale = append(stale, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+
+	if len(stale) == 0 {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete stale folders: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, "DELETE FROM folders WHERE account_id = ? AND path = ?")
+	if err != nil {
+		return fmt.Errorf("prepare delete stale folders: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, path := range stale {
+		if _, err := stmt.ExecContext(ctx, accountID, path); err != nil {
+			return fmt.Errorf("delete stale folder %q: %w", path, err)
+		}
+	}
+
+	return tx.Commit()
+}
