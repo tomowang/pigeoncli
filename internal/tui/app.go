@@ -359,8 +359,17 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m, cmd = m.setStatus("No accounts configured. Add one with `pigeon account add`, then `pigeon sync`.", sevInfo)
 			return m, cmd
 		}
-		m.selectedAccount = msg.accounts[0]
-		return m, m.loadFoldersCmd(msg.accounts[0].Slug)
+		// Keep the currently selected account if it still exists (e.g.
+		// after adding another account); otherwise default to the first.
+		target := msg.accounts[0]
+		for _, a := range msg.accounts {
+			if a.Slug == m.selectedAccount.Slug {
+				target = a
+				break
+			}
+		}
+		m.selectedAccount = target
+		return m, m.loadFoldersCmd(target.Slug)
 
 	case foldersLoadedMsg:
 		if msg.err != nil {
@@ -508,9 +517,16 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slog.Info("account added", "slug", msg.slug)
 		m.addingAccount = false
+		m.selectedAccount = msg.cfg
 		var cmd tea.Cmd
-		m, cmd = m.setStatus(fmt.Sprintf("Account %q added.", msg.slug), sevSuccess)
-		return m, tea.Batch(cmd, m.loadAccountsCmd())
+		m, cmd = m.setStatus(fmt.Sprintf("Account %q added, syncing…", msg.slug), sevSuccess)
+		cmds := []tea.Cmd{cmd, m.loadAccountsCmd()}
+		if m.syncCh == nil {
+			ch := make(chan folder.Progress)
+			m.syncCh = ch
+			cmds = append(cmds, m.startSyncCmd(msg.cfg, ch), listenSyncProgressCmd(ch), m.syncSpinner.Tick)
+		}
+		return m, tea.Batch(cmds...)
 
 	case googleAuthURLMsg:
 		var cmd tea.Cmd

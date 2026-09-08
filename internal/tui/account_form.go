@@ -114,8 +114,11 @@ func authTypeIndex(authType string) int {
 }
 
 // accountAddedMsg reports the outcome of submitting the add-account form.
+// cfg is the account as submitted (zero value on failure), used to select it
+// and kick off its initial sync once added.
 type accountAddedMsg struct {
 	slug string
+	cfg  account.Account
 	err  error
 }
 
@@ -139,7 +142,9 @@ func (m App) startGoogleAddAccountCmd(a account.Account, urlCh chan<- string) te
 		if err != nil {
 			return accountAddedMsg{slug: a.Slug, err: fmt.Errorf("google sign-in: %w", err)}
 		}
-		return accountAddedMsg{slug: a.Slug, err: svc.AddGoogle(ctx, a, token)}
+		err = svc.AddGoogle(ctx, a, token)
+		a.AuthType = account.AuthTypeGoogle
+		return accountAddedMsg{slug: a.Slug, cfg: a, err: err}
 	}
 }
 
@@ -345,7 +350,7 @@ func (m App) submitAddAccount() (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m, cmd = m.setStatus("Adding account...", sevInfo)
 	return m, tea.Batch(cmd, func() tea.Msg {
-		return accountAddedMsg{slug: a.Slug, err: svc.Add(ctx, a, password)}
+		return accountAddedMsg{slug: a.Slug, cfg: a, err: svc.Add(ctx, a, password)}
 	})
 }
 
