@@ -28,14 +28,11 @@ import (
 // do — so baking it in means Gmail accounts work out of the box, without
 // every user registering their own Google Cloud project.
 //
-// TODO(pigeon): replace with pigeon's real Google Cloud "Desktop app"
-// OAuth client credentials before shipping Gmail support; until then,
-// Gmail login fails at Google's consent screen with "invalid_client".
 // PIGEON_GOOGLE_OAUTH_CLIENT_ID / _SECRET override these for local
 // testing against a different Google Cloud project without a rebuild.
 const (
-	googleOAuthClientID     = "REPLACE_ME.apps.googleusercontent.com"
-	googleOAuthClientSecret = "REPLACE_ME"
+	googleOAuthClientID     = "447315878179-pa8ncso0p5ltlm8h6jef19dnmip3jkil.apps.googleusercontent.com"
+	googleOAuthClientSecret = "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"
 )
 
 // googleOAuthScope is the only OAuth scope that grants IMAP/SMTP access
