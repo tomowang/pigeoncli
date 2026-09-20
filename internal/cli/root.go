@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tomowang/pigeoncli/internal/core/compose"
+	"github.com/tomowang/pigeoncli/internal/core/logs"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
 	"github.com/tomowang/pigeoncli/internal/logging"
 	"github.com/tomowang/pigeoncli/internal/logo"
@@ -23,6 +24,7 @@ var (
 	logFilePath string
 
 	closeLogging func() error
+	resolvedLog  string // the log file path logging.Init was given
 )
 
 func newRootCmd() *cobra.Command {
@@ -47,6 +49,7 @@ func newRootCmd() *cobra.Command {
 				}
 			}
 			closeLogging, err = logging.Init(path, level)
+			resolvedLog = path
 			return err
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
@@ -72,7 +75,7 @@ func newRootCmd() *cobra.Command {
 			composeSvc := compose.NewService(st.Folder, st.Signature)
 			settingsSvc := settings.NewService(resolvedCfgPath)
 
-			return tui.Run(cmd.Context(), acctSvc, st.Folder, st.Message, composeSvc, settingsSvc)
+			return tui.Run(cmd.Context(), acctSvc, st.Folder, st.Message, composeSvc, settingsSvc, logs.NewService(resolvedLog))
 		},
 	}
 

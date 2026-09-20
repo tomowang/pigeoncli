@@ -25,6 +25,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/account"
 	"github.com/tomowang/pigeoncli/internal/core/compose"
 	"github.com/tomowang/pigeoncli/internal/core/folder"
+	"github.com/tomowang/pigeoncli/internal/core/logs"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/core/settings"
 	"github.com/tomowang/pigeoncli/internal/logo"
@@ -67,6 +68,7 @@ type App struct {
 	messageSvc  *message.Service
 	composeSvc  *compose.Service
 	settingsSvc *settings.Service
+	logsSvc     *logs.Service
 
 	theme Theme
 
@@ -77,6 +79,11 @@ type App struct {
 	statusGen     int
 	showHelp      bool
 	showLog       bool
+	logViewport   viewport.Model
+	logOlder      []logs.Entry // records from the log file that predate this session, newest first
+	logCursor     logs.Cursor  // where the next page of logOlder ends; 0 once the file start is reached
+	logLoading    bool
+	logExhausted  bool
 	quitting      bool
 	lastCtrlC     time.Time
 
@@ -143,7 +150,7 @@ type App struct {
 	accountAuthTypeIdx int
 }
 
-func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) App {
+func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service, logsSvc *logs.Service) App {
 	// DisableQuitKeybindings on every list: by default bubbles/list binds
 	// "q"/"esc" (Quit) and "ctrl+c" (ForceQuit) to return tea.Quit straight
 	// from the widget's own Update, which would exit the program immediately
@@ -176,6 +183,17 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 
 	defaultTheme, _ := themeByName("")
 
+	// Everything already in the log file when the session starts is "older"
+	// history for the log overlay to page in lazily; anything the session
+	// itself appends afterwards is shown from statusHistory instead.
+	var logCursor logs.Cursor
+	if logsSvc != nil {
+		var err error
+		if logCursor, err = logsSvc.End(); err != nil {
+			slog.Warn("locate log file end failed", "err", err)
+		}
+	}
+
 	syncSpinner := spinner.New()
 	syncSpinner.Spinner = spinner.Dot
 
@@ -186,6 +204,9 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		messageSvc:        messageSvc,
 		composeSvc:        composeSvc,
 		settingsSvc:       settingsSvc,
+		logsSvc:           logsSvc,
+		logCursor:         logCursor,
+		logExhausted:      logCursor == 0,
 		theme:             defaultTheme,
 		accounts:          accounts,
 		folders:           folders,
@@ -193,6 +214,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		searchResultsList: searchResultsList,
 		attachmentPicker:  attachmentPicker,
 		viewport:          viewport.New(0, 0),
+		logViewport:       viewport.New(0, 0),
 		syncInterval:      defaultSyncInterval,
 		initialSyncWindow: defaultInitialSyncWindow,
 		syncSpinner:       syncSpinner,
@@ -334,7 +356,26 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
+		m.layoutLog()
 		return m, nil
+
+	case logPageMsg:
+		m.logLoading = false
+		if msg.err != nil {
+			slog.Error("load older log records failed", "err", msg.err)
+			m.logExhausted = true
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("load older log records: %v", msg.err), sevError)
+			return m, cmd
+		}
+		m.logOlder = append(m.logOlder, msg.entries...)
+		m.logCursor = msg.next
+		m.logExhausted = msg.next == 0
+		if !m.showLog {
+			return m, nil
+		}
+		m.refreshLog()
+		return m.loadOlderLogCmd() // a short first page may not fill the viewport yet
 
 	case statusClearMsg:
 		if msg.gen == m.statusGen {
@@ -679,17 +720,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.showLog {
-		if key, ok := msg.(tea.KeyMsg); ok {
-			switch key.String() {
-			case "ctrl+c":
-				return m.handleCtrlC()
-			case "q":
-				m.quitting = true
-				return m, nil
-			}
-			m.showLog = false
-		}
-		return m, nil
+		return m.updateLog(msg)
 	}
 
 	if m.searching {
@@ -736,8 +767,8 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = true
 			return m, nil
 		case "L":
-			m.showLog = true
-			return m, nil
+			m.openLog()
+			return m.loadOlderLogCmd()
 		case "/":
 			if m.selectedAccount.Slug == "" {
 				var cmd tea.Cmd
@@ -1175,8 +1206,8 @@ func (m App) viewQuitConfirm() string {
 }
 
 // Run starts the Bubbletea program. It blocks until the user quits.
-func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service) error {
-	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc, composeSvc, settingsSvc), tea.WithContext(ctx), tea.WithAltScreen())
+func Run(ctx context.Context, accountSvc *account.Service, folderSvc *folder.Service, messageSvc *message.Service, composeSvc *compose.Service, settingsSvc *settings.Service, logsSvc *logs.Service) error {
+	p := tea.NewProgram(newApp(ctx, accountSvc, folderSvc, messageSvc, composeSvc, settingsSvc, logsSvc), tea.WithContext(ctx), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}

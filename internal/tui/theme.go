@@ -10,6 +10,7 @@ type Theme struct {
 	StatusInfo    lipgloss.Style
 	StatusSuccess lipgloss.Style
 	StatusError   lipgloss.Style
+	StatusWarn    lipgloss.Style
 	Shortcuts     lipgloss.Style // the always-on keybinding row below the status bar
 
 	ActivePane   lipgloss.Style
@@ -29,6 +30,8 @@ func (t Theme) StatusStyle(sev severity) lipgloss.Style {
 		return t.StatusSuccess
 	case sevError:
 		return t.StatusError
+	case sevWarn:
+		return t.StatusWarn
 	default:
 		return t.StatusInfo
 	}
@@ -43,6 +46,8 @@ var themes = map[string]Theme{
 			Foreground(lipgloss.Color("15")).Background(lipgloss.Color("28")),
 		StatusError: lipgloss.NewStyle().Bold(true).Padding(0, 1).
 			Foreground(lipgloss.Color("15")).Background(lipgloss.Color("124")),
+		StatusWarn: lipgloss.NewStyle().Bold(true).Padding(0, 1).
+			Foreground(lipgloss.Color("0")).Background(lipgloss.Color("220")),
 		Shortcuts: lipgloss.NewStyle().Padding(0, 1).
 			Foreground(lipgloss.Color("250")).Background(lipgloss.Color("236")),
 		ActivePane:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")),
@@ -62,6 +67,8 @@ var themes = map[string]Theme{
 			Foreground(lipgloss.Color("231")).Background(lipgloss.Color("22")),
 		StatusError: lipgloss.NewStyle().Bold(true).Padding(0, 1).
 			Foreground(lipgloss.Color("231")).Background(lipgloss.Color("88")),
+		StatusWarn: lipgloss.NewStyle().Bold(true).Padding(0, 1).
+			Foreground(lipgloss.Color("0")).Background(lipgloss.Color("178")),
 		Shortcuts: lipgloss.NewStyle().Padding(0, 1).
 			Foreground(lipgloss.Color("250")).Background(lipgloss.Color("235")),
 		ActivePane:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("135")),
@@ -81,6 +88,8 @@ var themes = map[string]Theme{
 			Foreground(lipgloss.Color("0")).Background(lipgloss.Color("120")),
 		StatusError: lipgloss.NewStyle().Bold(true).Padding(0, 1).
 			Foreground(lipgloss.Color("0")).Background(lipgloss.Color("210")),
+		StatusWarn: lipgloss.NewStyle().Bold(true).Padding(0, 1).
+			Foreground(lipgloss.Color("0")).Background(lipgloss.Color("229")),
 		Shortcuts: lipgloss.NewStyle().Padding(0, 1).
 			Foreground(lipgloss.Color("0")).Background(lipgloss.Color("253")),
 		ActivePane:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("25")),
