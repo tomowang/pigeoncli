@@ -14,7 +14,13 @@ Early scaffold (Phase 0). Expect missing features and rough edges — see
 
 ## Install
 
-Requires Go 1.27+.
+With [Homebrew](https://brew.sh) (macOS and Linux):
+
+```
+brew install tomowang/tap/pigeon
+```
+
+With Go 1.27+:
 
 ```
 go install github.com/tomowang/pigeoncli/cmd/pigeon@latest

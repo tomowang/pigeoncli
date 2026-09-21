@@ -28,6 +28,18 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+brews:
+  - name: pigeon
+    repository:
+      owner: tomowang
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/tomowang/pigeoncli
+    description: Local email client for the terminal
+    license: MIT
+    test: |
+      system "#{bin}/pigeon", "version"
+
 changelog:
   sort: asc
   format: "{{ .Message }}"
