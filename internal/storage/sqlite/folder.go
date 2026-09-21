@@ -134,6 +134,22 @@ func (db *DB) UpdateFolderSyncState(ctx context.Context, folderID int64, uidVali
 	return total, unread, nil
 }
 
+// RefreshFolderCounts recomputes a folder's total/unread counts from the
+// messages table. UpdateFolderSyncState does this after a sync; local edits
+// (flag changes, moves, purges) call it so the folder list's badges don't
+// go stale until the next sync.
+func (db *DB) RefreshFolderCounts(ctx context.Context, folderID int64) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE folders SET
+			total_count = (SELECT COUNT(*) FROM messages WHERE folder_id = ?),
+			unread_count = (SELECT COUNT(*) FROM messages WHERE folder_id = ? AND seen = 0)
+		WHERE id = ?
+	`, folderID, folderID, folderID); err != nil {
+		return fmt.Errorf("refresh folder counts: %w", err)
+	}
+	return nil
+}
+
 // ClearFolderMessages deletes all cached messages for a folder — used when
 // UIDVALIDITY changes and the local cache must be rebuilt from scratch.
 func (db *DB) ClearFolderMessages(ctx context.Context, folderID int64) error {

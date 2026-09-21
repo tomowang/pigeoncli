@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -189,6 +190,90 @@ func (db *DB) MessageFlags(ctx context.Context, folderID int64, uid uint32) ([]s
 	return flags, nil
 }
 
+// ApplyFlagChanges adds and removes flags on the cached messages uids in
+// folderID, in one transaction, keeping the seen column in step. Unlike
+// UpdateMessageFlags, which overwrites a message's full flag set with what
+// the server reported, this is a read-modify-write for local edits that
+// have just been applied on the server. UIDs with no cached row are
+// skipped. Flag names compare case-insensitively, as IMAP system flags do.
+func (db *DB) ApplyFlagChanges(ctx context.Context, folderID int64, uids []uint32, add, remove []string) error {
+	if len(uids) == 0 || (len(add) == 0 && len(remove) == 0) {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin apply flag changes: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	sel, err := tx.PrepareContext(ctx, "SELECT flags FROM messages WHERE folder_id = ? AND uid = ?")
+	if err != nil {
+		return fmt.Errorf("prepare select flags: %w", err)
+	}
+	defer func() { _ = sel.Close() }()
+	upd, err := tx.PrepareContext(ctx,
+		"UPDATE messages SET flags = ?, seen = ?, synced_at = CURRENT_TIMESTAMP WHERE folder_id = ? AND uid = ?")
+	if err != nil {
+		return fmt.Errorf("prepare update flags: %w", err)
+	}
+	defer func() { _ = upd.Close() }()
+
+	for _, uid := range uids {
+		var flagsJSON string
+		if err := sel.QueryRowContext(ctx, folderID, uid).Scan(&flagsJSON); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return fmt.Errorf("load flags for uid=%d: %w", uid, err)
+		}
+		var flags []string
+		if err := json.Unmarshal([]byte(flagsJSON), &flags); err != nil {
+			return fmt.Errorf("decode flags for uid=%d: %w", uid, err)
+		}
+		flags = mergeFlags(flags, add, remove)
+		out, err := json.Marshal(flags)
+		if err != nil {
+			return fmt.Errorf("encode flags for uid=%d: %w", uid, err)
+		}
+		seen := 0
+		if hasSeenFlag(flags) {
+			seen = 1
+		}
+		if _, err := upd.ExecContext(ctx, string(out), seen, folderID, uid); err != nil {
+			return fmt.Errorf("update flags for uid=%d: %w", uid, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// mergeFlags returns cur with the flags in remove dropped and those in add
+// appended (when not already present), preserving cur's order. It never
+// returns nil, so the result always encodes as a JSON array.
+func mergeFlags(cur, add, remove []string) []string {
+	out := make([]string, 0, len(cur)+len(add))
+	for _, f := range cur {
+		if !containsFold(remove, f) {
+			out = append(out, f)
+		}
+	}
+	for _, f := range add {
+		if !containsFold(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func containsFold(list []string, s string) bool {
+	for _, x := range list {
+		if strings.EqualFold(x, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // DeleteMessagesNotIn removes cached messages in folderID whose UID isn't
 // in keepUIDs — used to reconcile server-side deletions/expunges.
 func (db *DB) DeleteMessagesNotIn(ctx context.Context, folderID int64, keepUIDs []uint32) error {
@@ -252,6 +337,33 @@ func (db *DB) DeleteMessage(ctx context.Context, folderID int64, uid uint32) err
 		return fmt.Errorf("delete message uid=%d: %w", uid, err)
 	}
 	return nil
+}
+
+// DeleteMessages removes several cached messages from folderID in one
+// transaction — the batch form of DeleteMessage, used after a server-side
+// move or purge of a whole selection.
+func (db *DB) DeleteMessages(ctx context.Context, folderID int64, uids []uint32) error {
+	if len(uids) == 0 {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete messages: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, "DELETE FROM messages WHERE folder_id = ? AND uid = ?")
+	if err != nil {
+		return fmt.Errorf("prepare delete messages: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, uid := range uids {
+		if _, err := stmt.ExecContext(ctx, folderID, uid); err != nil {
+			return fmt.Errorf("delete uid=%d: %w", uid, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // formatDate renders t for storage in the messages.date column. SQLite has

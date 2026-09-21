@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tomowang/pigeoncli/internal/auth"
 	"github.com/tomowang/pigeoncli/internal/config"
 	"github.com/tomowang/pigeoncli/internal/imap"
 	"github.com/tomowang/pigeoncli/internal/mime"
@@ -89,6 +88,11 @@ const searchLimit = 200
 type Service struct {
 	db    *sqlite.DB
 	blobs *blob.Store
+
+	// dial opens an authenticated IMAP connection for an account. It is nil
+	// in production (see dialAccount) and only replaced by tests that point
+	// the service at an in-process server.
+	dial func(ctx context.Context, cfg config.Account) (*imap.Client, error)
 }
 
 // NewService creates a Service backed by db and blobs.
@@ -306,28 +310,19 @@ func (s *Service) cachedOrFetchRaw(ctx context.Context, cfg config.Account, fold
 const fetchTimeout = 20 * time.Second
 
 func (s *Service) fetchRaw(ctx context.Context, cfg config.Account, folderPath string, uid uint32) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-
-	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
-	if err != nil {
-		return nil, err
-	}
-	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
-	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-	defer func() { _ = cl.Close() }()
-	defer cl.WatchContext(ctx)()
-
-	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
-		return nil, fmt.Errorf("select %q: %w", folderPath, err)
-	}
-	raw, err := cl.FetchRawBody(ctx, uid)
-	if err != nil {
-		return nil, fmt.Errorf("fetch body: %w", err)
-	}
-	return raw, nil
+	var raw []byte
+	err := s.withClient(ctx, cfg, fetchTimeout, func(ctx context.Context, cl *imap.Client) error {
+		if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
+			return fmt.Errorf("select %q: %w", folderPath, err)
+		}
+		var err error
+		raw, err = cl.FetchRawBody(ctx, uid)
+		if err != nil {
+			return fmt.Errorf("fetch body: %w", err)
+		}
+		return nil
+	})
+	return raw, err
 }
 
 // markSeen sets \Seen on uid, on the server and in the local cache, unless
@@ -338,101 +333,28 @@ func (s *Service) markSeen(ctx context.Context, cfg config.Account, folderPath s
 	if err != nil {
 		return err
 	}
-	for _, f := range flags {
-		if f == seenFlag {
-			return nil
-		}
+	if (Message{Flags: flags}).IsRead() {
+		return nil
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-
-	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
-	if err != nil {
-		return err
-	}
-	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer func() { _ = cl.Close() }()
-	defer cl.WatchContext(ctx)()
-
-	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
-		return fmt.Errorf("select %q: %w", folderPath, err)
-	}
-	if err := cl.MarkSeen(ctx, uid); err != nil {
-		return err
-	}
-
-	if err := s.db.UpdateMessageFlags(ctx, folderID, map[uint32][]string{uid: append(flags, seenFlag)}); err != nil {
-		return fmt.Errorf("cache seen flag: %w", err)
-	}
-	return nil
+	return s.SetFlags(ctx, cfg, []Ref{{FolderPath: folderPath, UID: uid}}, []Flag{FlagSeen}, nil)
 }
 
 // MoveToJunk moves the message at uid in folderPath to the account's
 // server-designated Junk folder (RFC 6154 special-use \Junk) — the same
 // move-based mechanism general mail clients use for "report spam".
 func (s *Service) MoveToJunk(ctx context.Context, cfg config.Account, folderPath string, uid uint32) error {
-	return s.moveToSpecialUse(ctx, cfg, folderPath, uid, junkSpecialUse, "the Junk folder", ErrNoJunkFolder)
+	_, err := s.moveToSpecialUse(ctx, cfg, []Ref{{FolderPath: folderPath, UID: uid}},
+		[]string{junkSpecialUse}, ErrNoJunkFolder, errors.New("message is already in the Junk folder"))
+	return err
 }
 
 // MoveToInbox moves the message at uid in folderPath back to the account's
 // Inbox (RFC 6154 special-use \Inbox) — the "not spam" counterpart to
 // MoveToJunk, for undoing a mistaken spam report.
 func (s *Service) MoveToInbox(ctx context.Context, cfg config.Account, folderPath string, uid uint32) error {
-	return s.moveToSpecialUse(ctx, cfg, folderPath, uid, inboxSpecialUse, "the Inbox", ErrNoInboxFolder)
-}
-
-// moveToSpecialUse moves the message at uid in folderPath to the account's
-// folder tagged with destSpecialUse (RFC 6154): a MOVE (or COPY + STORE
-// \Deleted + EXPUNGE fallback) on the server, then dropping the local cache
-// row for the source folder, since the message no longer lives there — the
-// destination folder picks it up on its next sync. destLabel names the
-// destination folder for the "already there" error message; errNoFolder is
-// returned if the account has no synced folder carrying destSpecialUse.
-func (s *Service) moveToSpecialUse(ctx context.Context, cfg config.Account, folderPath string, uid uint32, destSpecialUse, destLabel string, errNoFolder error) error {
-	accountID, folderID, err := s.resolveIDs(ctx, cfg.Slug, folderPath)
-	if err != nil {
-		return err
-	}
-	destPath, ok, err := s.db.FolderBySpecialUse(ctx, accountID, destSpecialUse)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return errNoFolder
-	}
-	if destPath == folderPath {
-		return fmt.Errorf("message is already in %s", destLabel)
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-
-	provider, err := auth.NewProvider(cfg.AuthType, cfg.Username, cfg.Slug)
-	if err != nil {
-		return err
-	}
-	cl, err := imap.DialClient(ctx, imap.DialOptions{Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS}, provider)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer func() { _ = cl.Close() }()
-	defer cl.WatchContext(ctx)()
-
-	if _, _, _, _, err := cl.SelectFolder(ctx, folderPath); err != nil {
-		return fmt.Errorf("select %q: %w", folderPath, err)
-	}
-	if err := cl.MoveToFolder(ctx, uid, destPath); err != nil {
-		return err
-	}
-
-	if err := s.db.DeleteMessage(ctx, folderID, uid); err != nil {
-		return fmt.Errorf("update local cache: %w", err)
-	}
-	return nil
+	_, err := s.moveToSpecialUse(ctx, cfg, []Ref{{FolderPath: folderPath, UID: uid}},
+		[]string{inboxSpecialUse}, ErrNoInboxFolder, errors.New("message is already in the Inbox"))
+	return err
 }
 
 func (s *Service) resolveIDs(ctx context.Context, accountSlug, folderPath string) (accountID, folderID int64, err error) {

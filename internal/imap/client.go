@@ -2,6 +2,7 @@ package imap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -339,29 +340,140 @@ func (cl *Client) FetchRawBody(ctx context.Context, uid uint32) ([]byte, error) 
 	return bufs[0].BodySection[0].Bytes, nil
 }
 
-// MoveToFolder moves the given UID from the currently selected mailbox to
+// ErrUIDPlusRequired is returned by operations that would otherwise have to
+// fall back to a plain EXPUNGE, which deletes every \Deleted message in the
+// mailbox rather than just the ones being acted on. That's only safe with
+// UID EXPUNGE (UIDPLUS, RFC 4315).
+var ErrUIDPlusRequired = errors.New("server supports neither MOVE nor UIDPLUS, so this can't be done safely")
+
+// MoveResult describes where a batch of moved messages landed.
+type MoveResult struct {
+	// UIDValidity is the destination mailbox's UIDVALIDITY, so a caller
+	// that acts on Dest later can tell whether the UIDs are still valid.
+	UIDValidity uint32
+	// Dest maps each moved source UID to its new UID in the destination
+	// mailbox (COPYUID, RFC 4315). It is empty when the server didn't
+	// report UIDs (no UIDPLUS) or reported a mapping that couldn't be
+	// trusted.
+	Dest map[uint32]uint32
+}
+
+func uidSetOf(uids []uint32) imap.UIDSet {
+	var set imap.UIDSet
+	for _, u := range uids {
+		set.AddNum(imap.UID(u))
+	}
+	return set
+}
+
+// MoveToFolder moves the given UIDs from the currently selected mailbox to
 // destPath, using the server's MOVE extension (RFC 6851) when available and
-// transparently falling back to COPY + STORE \Deleted + EXPUNGE otherwise
-// (see imapclient.Client.Move).
-func (cl *Client) MoveToFolder(ctx context.Context, uid uint32, destPath string) error {
-	uidSet := imap.UIDSetNum(imap.UID(uid))
-	if _, err := cl.c.Move(uidSet, destPath).Wait(); err != nil {
-		return fmt.Errorf("move uid=%d to %q: %w", uid, destPath, err)
+// otherwise falling back to COPY + STORE \Deleted + UID EXPUNGE (see
+// imapclient.Client.Move). Without MOVE or UIDPLUS that fallback would
+// expunge every \Deleted message in the mailbox, so it returns
+// ErrUIDPlusRequired instead.
+func (cl *Client) MoveToFolder(ctx context.Context, uids []uint32, destPath string) (MoveResult, error) {
+	if len(uids) == 0 {
+		return MoveResult{}, nil
+	}
+	caps := cl.c.Caps()
+	if !caps.Has(imap.CapMove) && !caps.Has(imap.CapUIDPlus) {
+		return MoveResult{}, ErrUIDPlusRequired
+	}
+
+	src := uidSetOf(uids)
+	data, err := cl.c.Move(src, destPath).Wait()
+	if err != nil {
+		return MoveResult{}, fmt.Errorf("move %d message(s) to %q: %w", len(uids), destPath, err)
+	}
+	return moveResultFromData(src, data), nil
+}
+
+// moveResultFromData pairs the COPYUID source and destination UIDs
+// positionally (RFC 4315: the n-th source UID became the n-th destination
+// UID). Both sets are normalized to ascending order by the client library,
+// which matches the order the server copies an ascending request in; the
+// pairing is only trusted when the reported source set is exactly the set
+// requested and the counts agree, otherwise Dest is left empty.
+func moveResultFromData(requested imap.UIDSet, data *imapclient.MoveData) MoveResult {
+	res := MoveResult{}
+	if data == nil {
+		return res
+	}
+	res.UIDValidity = data.UIDValidity
+	srcSet, ok := data.SourceUIDs.(imap.UIDSet)
+	if !ok {
+		return res
+	}
+	dstSet, ok := data.DestUIDs.(imap.UIDSet)
+	if !ok {
+		return res
+	}
+	srcUIDs, ok1 := srcSet.Nums()
+	dstUIDs, ok2 := dstSet.Nums()
+	reqUIDs, ok3 := requested.Nums()
+	if !ok1 || !ok2 || !ok3 || len(srcUIDs) != len(dstUIDs) || len(srcUIDs) != len(reqUIDs) {
+		return res
+	}
+	for i := range srcUIDs {
+		if srcUIDs[i] != reqUIDs[i] {
+			return res
+		}
+	}
+	res.Dest = make(map[uint32]uint32, len(srcUIDs))
+	for i := range srcUIDs {
+		res.Dest[uint32(srcUIDs[i])] = uint32(dstUIDs[i])
+	}
+	return res
+}
+
+// StoreFlags adds and/or removes flags on the given UIDs in the currently
+// selected mailbox. Flags are IMAP flag strings such as `\Seen`.
+func (cl *Client) StoreFlags(ctx context.Context, uids []uint32, add, remove []string) error {
+	if len(uids) == 0 {
+		return nil
+	}
+	set := uidSetOf(uids)
+	for _, op := range []struct {
+		op    imap.StoreFlagsOp
+		flags []string
+	}{
+		{imap.StoreFlagsAdd, add},
+		{imap.StoreFlagsDel, remove},
+	} {
+		if len(op.flags) == 0 {
+			continue
+		}
+		flags := make([]imap.Flag, len(op.flags))
+		for i, f := range op.flags {
+			flags[i] = imap.Flag(f)
+		}
+		storeFlags := &imap.StoreFlags{Op: op.op, Flags: flags, Silent: true}
+		if err := cl.c.Store(set, storeFlags, nil).Close(); err != nil {
+			return fmt.Errorf("store flags on %d message(s): %w", len(uids), err)
+		}
 	}
 	return nil
 }
 
-// MarkSeen sets the \Seen flag on the given UID in the currently selected
-// mailbox, telling the server the message has been read.
-func (cl *Client) MarkSeen(ctx context.Context, uid uint32) error {
-	uidSet := imap.UIDSetNum(imap.UID(uid))
-	storeFlags := &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Flags:  []imap.Flag{imap.FlagSeen},
-		Silent: true,
+// Purge permanently deletes the given UIDs from the currently selected
+// mailbox: STORE +FLAGS \Deleted followed by UID EXPUNGE. Without UIDPLUS
+// it returns ErrUIDPlusRequired rather than issuing a plain EXPUNGE, which
+// would also delete unrelated messages already flagged \Deleted.
+func (cl *Client) Purge(ctx context.Context, uids []uint32) error {
+	if len(uids) == 0 {
+		return nil
 	}
-	if err := cl.c.Store(uidSet, storeFlags, nil).Close(); err != nil {
-		return fmt.Errorf("mark seen uid=%d: %w", uid, err)
+	if !cl.c.Caps().Has(imap.CapUIDPlus) {
+		return ErrUIDPlusRequired
+	}
+	set := uidSetOf(uids)
+	storeFlags := &imap.StoreFlags{Op: imap.StoreFlagsAdd, Flags: []imap.Flag{imap.FlagDeleted}, Silent: true}
+	if err := cl.c.Store(set, storeFlags, nil).Close(); err != nil {
+		return fmt.Errorf("flag %d message(s) deleted: %w", len(uids), err)
+	}
+	if err := cl.c.UIDExpunge(set).Close(); err != nil {
+		return fmt.Errorf("expunge %d message(s): %w", len(uids), err)
 	}
 	return nil
 }
