@@ -142,6 +142,16 @@ type App struct {
 	saveAttachmentInput textinput.Model
 	pendingAttachment   message.Attachment
 
+	// Triage (archive/delete/move/undo). lastMoved holds the most recent
+	// move's results so U can reverse it; triageMsg is the message a pending
+	// purge confirmation or folder picker is about.
+	lastMoved        []message.MoveResult
+	lastMovedAccount account.Account
+	confirmingPurge  bool
+	pickingFolder    bool
+	folderPicker     list.Model
+	triageMsg        message.Message
+
 	addingAccount      bool
 	accountForm        [accountFieldCount]textinput.Model
 	accountFormField   accountFormField
@@ -181,6 +191,11 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 	attachmentPicker.SetShowHelp(false)
 	attachmentPicker.DisableQuitKeybindings()
 
+	folderPicker := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	folderPicker.Title = "Move to"
+	folderPicker.SetShowHelp(false)
+	folderPicker.DisableQuitKeybindings()
+
 	defaultTheme, _ := themeByName("")
 
 	// Everything already in the log file when the session starts is "older"
@@ -213,6 +228,7 @@ func newApp(ctx context.Context, accountSvc *account.Service, folderSvc *folder.
 		messages:          messages,
 		searchResultsList: searchResultsList,
 		attachmentPicker:  attachmentPicker,
+		folderPicker:      folderPicker,
 		viewport:          viewport.New(0, 0),
 		logViewport:       viewport.New(0, 0),
 		syncInterval:      defaultSyncInterval,
@@ -524,6 +540,9 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// copy); reload folders so this pane's counts reflect that too.
 		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
 
+	case triageResultMsg:
+		return m.handleTriageResult(msg)
+
 	case moveMessageResultMsg:
 		m = m.stopBusy()
 		verb := "mark as spam"
@@ -731,6 +750,14 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSearchResults(msg)
 	}
 
+	if m.confirmingPurge {
+		return m.updateConfirmPurge(msg)
+	}
+
+	if m.pickingFolder {
+		return m.updatePickingFolder(msg)
+	}
+
 	if m.pickingAttachment {
 		return m.updateAttachmentPicker(msg)
 	}
@@ -757,6 +784,11 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if m.focus == focusMessages {
+			if nm, cmd, handled := m.handleTriageKey(key.String()); handled {
+				return nm, cmd
+			}
+		}
 		switch key.String() {
 		case "ctrl+c":
 			return m.handleCtrlC()
@@ -856,6 +888,9 @@ func (m App) openSelection() (tea.Model, tea.Cmd) {
 }
 
 func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if nm, cmd, handled := m.handleTriageKey(msg.String()); handled {
+		return nm, cmd
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
@@ -954,6 +989,7 @@ func (m *App) layout() {
 
 	m.saveAttachmentInput.Width = max(m.width-4, 10)
 	m.attachmentPicker.SetSize(m.width, max(m.height-3, 1)) // reserve the header, status bar, and shortcuts rows
+	m.folderPicker.SetSize(m.width, max(m.height-3, 1))     // ditto
 
 	if m.composing {
 		m.composeTo.Width = max(m.width-4, 10)
@@ -993,6 +1029,14 @@ func (m App) View() string {
 
 	if m.showSearchResults {
 		return m.viewSearchResults()
+	}
+
+	if m.confirmingPurge {
+		return m.viewConfirmPurge()
+	}
+
+	if m.pickingFolder {
+		return m.viewFolderPicker()
 	}
 
 	if m.pickingAttachment {
@@ -1079,9 +1123,9 @@ func (m App) shortcutsLine() string {
 		if m.viewingRaw {
 			mode = "raw"
 		}
-		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · t: toggle raw · !: spam · esc: back · q: quit", mode)
+		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · e: archive · d: delete · m: move · u: read · *: star · !: spam · esc: back · q: quit", mode)
 	}
-	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · !: spam · ?: help · L: log · q: quit"
+	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · e: archive · d: delete · m: move · ?: help · q: quit"
 }
 
 // statusBarText returns what the status bar (the row above shortcuts) should
@@ -1150,6 +1194,17 @@ var helpSections = []helpSection{
 			{"L", "toggle the status log"},
 			{"q / ctrl+c", "quit (asks to confirm)"},
 			{"ctrl+c ctrl+c", "quit immediately, no confirm (press twice)"},
+		},
+	},
+	{
+		Title: "Messages (list or viewer)",
+		Rows: [][2]string{
+			{"e", "archive"},
+			{"d", "delete (move to Trash); in the Trash, delete permanently after confirming"},
+			{"m", "move to another folder"},
+			{"u", "toggle read / unread"},
+			{"*", "toggle star"},
+			{"U", "undo the last archive / delete / move"},
 		},
 	},
 	{

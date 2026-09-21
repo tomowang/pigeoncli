@@ -48,8 +48,11 @@ func (m messageItem) Title() string {
 	if m.InReplyTo != "" || len(m.References) > 0 {
 		title = "↩ " + title
 	}
-	if !hasFlag(m.Flags, `\Seen`) {
+	if !message.Message(m).IsRead() {
 		title = "* " + title
+	}
+	if message.Message(m).IsStarred() {
+		title = "★ " + title
 	}
 	return title
 }
@@ -92,13 +95,4 @@ func (a attachmentItem) Title() string {
 
 func (a attachmentItem) Description() string {
 	return fmt.Sprintf("%s — %s", a.ContentType, humanSize(a.Size))
-}
-
-func hasFlag(flags []string, want string) bool {
-	for _, f := range flags {
-		if f == want {
-			return true
-		}
-	}
-	return false
 }
