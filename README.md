@@ -103,7 +103,13 @@ pigeon message show <slug> <uid>           # show a message's headers and body (
 pigeon message search <slug> <query>       # full-text search a synced account's headers
 pigeon message spam <slug> <uid>           # report a message as spam (moves to Junk)
 pigeon message unspam <slug> <uid>         # undo a spam report (moves back to Inbox)
+pigeon message archive <slug> <uid>...     # move messages to the Archive folder (All Mail on Gmail)
+pigeon message delete <slug> <uid>...      # move messages to Trash (--permanent deletes for good, --yes skips the prompt)
+pigeon message move <slug> <dest> <uid>... # move messages to another synced folder
+pigeon message read|unread <slug> <uid>... # mark messages read or unread
+pigeon message star|unstar <slug> <uid>... # star or unstar messages
 pigeon message attachment save <slug> <uid> <index> <dest-path>  # save an attachment to disk
+# archive/delete/move/read/unread/star/unstar/spam/unspam all take --folder (default: INBOX)
 
 pigeon folder list <slug>        # list an account's synced folders
 
@@ -125,9 +131,21 @@ Global flags (any subcommand): `--config`, `--db`, `--blobs`, `--log-level`,
 | `c` | compose a new message |
 | `s` | sync the selected account (also runs automatically in the background) |
 | `/` | search subject/from/to/cc for the selected account |
+| `e` | archive the selected message |
+| `d` | delete it (moves to Trash; in the Trash it deletes permanently, after a confirmation) |
+| `m` | move it to another folder |
+| `u` | toggle read / unread |
+| `*` | toggle star |
+| `U` | undo the last archive / delete / move |
+| `!` | report as spam (moves to Junk); in the Junk folder, moves back to the Inbox |
 | `?` | toggle help |
 | `L` | toggle the status log |
 | `q` / `ctrl+c` | quit (asks to confirm); press `ctrl+c` twice to quit immediately |
+
+The message keys (`e d m u * U !`) work in the message list and in the
+message viewer, and act on the selected or open message. They take over the
+`d`/`u` paging keys there (the list's page up/down, the viewer's half-page
+scroll); `pgup`/`pgdn` and `ctrl+d`/`ctrl+u` still scroll.
 
 In the message viewer: `r` reply, `R` reply-all, `t` toggle raw/rendered,
 `g` go to related messages, `a` save an attachment, `esc` back to list.
