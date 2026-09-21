@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -19,13 +20,14 @@ const defaultListFolder = "INBOX"
 func newMessageCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "message",
-		Short: "List and read synced messages",
+		Short: "List, read, and triage synced messages",
 	}
 	cmd.AddCommand(newMessageListCmd())
 	cmd.AddCommand(newMessageShowCmd())
 	cmd.AddCommand(newMessageSearchCmd())
 	cmd.AddCommand(newMessageSpamCmd())
 	cmd.AddCommand(newMessageUnspamCmd())
+	cmd.AddCommand(newMessageActionCmds()...)
 	cmd.AddCommand(newMessageAttachmentCmd())
 	return cmd
 }
@@ -314,17 +316,15 @@ func newMessageAttachmentSaveCmd() *cobra.Command {
 }
 
 func formatFlags(flags []string) string {
-	seen := false
-	for _, f := range flags {
-		if f == `\Seen` {
-			seen = true
-			break
-		}
+	m := message.Message{Flags: flags}
+	var parts []string
+	if !m.IsRead() {
+		parts = append(parts, "unread")
 	}
-	if seen {
-		return ""
+	if m.IsStarred() {
+		parts = append(parts, "starred")
 	}
-	return "unread"
+	return strings.Join(parts, ",")
 }
 
 func joinAddrs(addrs []string) string {
