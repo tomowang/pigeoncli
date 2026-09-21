@@ -1,5 +1,10 @@
 # pigeon
 
+[![CI](https://github.com/tomowang/pigeoncli/actions/workflows/ci.yml/badge.svg)](https://github.com/tomowang/pigeoncli/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/tomowang/pigeoncli)](https://github.com/tomowang/pigeoncli/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/tomowang/pigeoncli)](./LICENSE)
+[![Homebrew](https://img.shields.io/badge/homebrew-tomowang%2Ftap-FBB040?logo=homebrew&logoColor=white)](https://github.com/tomowang/homebrew-tap)
+
 pigeon is a local email client for the terminal, built on
 [bubbletea](https://github.com/charmbracelet/bubbletea). It syncs IMAP
 mailboxes into a local SQLite cache so browsing works offline, and sends
