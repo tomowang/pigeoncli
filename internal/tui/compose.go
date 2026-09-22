@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -53,6 +54,8 @@ func (m App) enterCompose(draft compose.Draft, field composeField) App {
 
 	m.composeInReplyTo = draft.InReplyTo
 	m.composeReferences = draft.References
+	m.composeAttachments = draft.Attachments
+	m.attachingFile = false
 
 	m.composing = true
 	m = m.clearStatus()
@@ -77,6 +80,9 @@ func (m App) enterCompose(draft compose.Draft, field composeField) App {
 // including non-key messages like cursor-blink ticks — goes to whichever
 // widget currently has focus.
 func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.attachingFile {
+		return m.updateAttachingFile(msg)
+	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -87,6 +93,10 @@ func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.cycleComposeField(), nil
 		case "ctrl+s":
 			return m.sendCompose()
+		case "ctrl+g":
+			return m.beginAttachFile(), nil
+		case "ctrl+r":
+			return m.removeLastAttachment()
 		}
 	}
 
@@ -102,6 +112,67 @@ func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.composeBody, cmd = m.composeBody.Update(msg)
 	}
 	return m, cmd
+}
+
+// beginAttachFile switches into the attach-file path prompt, a lightweight
+// mode within compose (not a top-level App mode): updateComposing routes
+// here first while m.attachingFile is set, and viewCompose renders the
+// prompt in place of the compose fields.
+func (m App) beginAttachFile() App {
+	m.attachFileInput = textinput.New()
+	m.attachFileInput.Prompt = "Attach file: "
+	m.attachFileInput.CursorEnd()
+	m.attachFileInput.Focus()
+	m.attachingFile = true
+	m = m.clearStatus()
+	m.layout()
+	return m
+}
+
+// updateAttachingFile handles input while the attach-file prompt is active.
+func (m App) updateAttachingFile(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "ctrl+c":
+			return m.handleCtrlC()
+		case "esc":
+			m.attachingFile = false
+			m = m.clearStatus()
+			return m, nil
+		case "enter":
+			path := strings.TrimSpace(m.attachFileInput.Value())
+			m.attachingFile = false
+			if path == "" {
+				return m, nil
+			}
+			att, err := compose.NewAttachmentFromFile(path)
+			if err != nil {
+				var cmd tea.Cmd
+				m, cmd = m.setStatus(fmt.Sprintf("attach %s: %v", path, err), sevError)
+				return m, cmd
+			}
+			m.composeAttachments = append(m.composeAttachments, att)
+			m.layout() // the body shrinks by one line once an attachments line is shown
+			var cmd tea.Cmd
+			m, cmd = m.setStatus(fmt.Sprintf("Attached %s (%s).", att.Filename, humanSize(int64(len(att.Data)))), sevSuccess)
+			return m, cmd
+		}
+	}
+	var cmd tea.Cmd
+	m.attachFileInput, cmd = m.attachFileInput.Update(msg)
+	return m, cmd
+}
+
+// removeLastAttachment drops the most recently attached file from the
+// draft being composed.
+func (m App) removeLastAttachment() (App, tea.Cmd) {
+	if len(m.composeAttachments) == 0 {
+		return m.setStatus("No attachments to remove.", sevInfo)
+	}
+	removed := m.composeAttachments[len(m.composeAttachments)-1]
+	m.composeAttachments = m.composeAttachments[:len(m.composeAttachments)-1]
+	m.layout()
+	return m.setStatus(fmt.Sprintf("Removed %s.", removed.Filename), sevInfo)
 }
 
 func (m App) cycleComposeField() App {
@@ -126,12 +197,13 @@ func (m App) cycleComposeField() App {
 
 func (m App) sendCompose() (tea.Model, tea.Cmd) {
 	draft := compose.Draft{
-		To:         splitAddrs(m.composeTo.Value()),
-		Cc:         splitAddrs(m.composeCc.Value()),
-		Subject:    m.composeSubject.Value(),
-		Body:       m.composeBody.Value(),
-		InReplyTo:  m.composeInReplyTo,
-		References: m.composeReferences,
+		To:          splitAddrs(m.composeTo.Value()),
+		Cc:          splitAddrs(m.composeCc.Value()),
+		Subject:     m.composeSubject.Value(),
+		Body:        m.composeBody.Value(),
+		InReplyTo:   m.composeInReplyTo,
+		References:  m.composeReferences,
+		Attachments: m.composeAttachments,
 	}
 	cfg := m.selectedAccount
 	ctx := m.ctx
@@ -156,11 +228,30 @@ func splitAddrs(s string) []string {
 }
 
 func (m App) viewCompose() string {
+	if m.attachingFile {
+		return m.attachFileInput.View() + "\n" + m.footer()
+	}
 	fields := lipgloss.JoinVertical(lipgloss.Left,
 		m.composeTo.View(),
 		m.composeCc.View(),
 		m.composeSubject.View(),
 		m.composeBody.View(),
 	)
+	if line := m.composeAttachmentsLine(); line != "" {
+		fields = lipgloss.JoinVertical(lipgloss.Left, fields, line)
+	}
 	return fields + "\n" + m.footer()
+}
+
+// composeAttachmentsLine renders a one-line summary of the files attached
+// to the draft being composed, or "" if there are none.
+func (m App) composeAttachmentsLine() string {
+	if len(m.composeAttachments) == 0 {
+		return ""
+	}
+	parts := make([]string, len(m.composeAttachments))
+	for i, a := range m.composeAttachments {
+		parts[i] = fmt.Sprintf("%s (%s)", a.Filename, humanSize(int64(len(a.Data))))
+	}
+	return "Attachments: " + strings.Join(parts, "   ") + "   (ctrl+r: remove last)"
 }

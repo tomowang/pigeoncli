@@ -122,14 +122,17 @@ type App struct {
 	viewBody   message.Body
 	viewport   viewport.Model
 
-	composing         bool
-	composeField      composeField
-	composeTo         textinput.Model
-	composeCc         textinput.Model
-	composeSubject    textinput.Model
-	composeBody       textarea.Model
-	composeInReplyTo  string
-	composeReferences string
+	composing          bool
+	composeField       composeField
+	composeTo          textinput.Model
+	composeCc          textinput.Model
+	composeSubject     textinput.Model
+	composeBody        textarea.Model
+	composeInReplyTo   string
+	composeReferences  string
+	composeAttachments []compose.Attachment
+	attachingFile      bool
+	attachFileInput    textinput.Model
 
 	searching         bool
 	searchInput       textinput.Model
@@ -996,7 +999,12 @@ func (m *App) layout() {
 		m.composeCc.Width = max(m.width-4, 10)
 		m.composeSubject.Width = max(m.width-4, 10)
 		m.composeBody.SetWidth(max(m.width-2, 10))
-		m.composeBody.SetHeight(max(m.height-6, 3)) // reserve To/Cc/Subject + status bar + shortcuts row
+		attachmentsLine := 0
+		if len(m.composeAttachments) > 0 {
+			attachmentsLine = 1
+		}
+		m.composeBody.SetHeight(max(m.height-6-attachmentsLine, 3)) // reserve To/Cc/Subject + attachments + status bar + shortcuts row
+		m.attachFileInput.Width = max(m.width-4, 10)
 	}
 
 	if m.addingAccount {
@@ -1113,7 +1121,10 @@ func (m App) viewCard() string {
 // Unlike the status bar above it, this row is always shown.
 func (m App) shortcutsLine() string {
 	if m.composing {
-		return "pigeon — compose — tab: next field · ctrl+s: send · esc: cancel"
+		if m.attachingFile {
+			return "pigeon — attach file — enter: attach · esc: cancel"
+		}
+		return "pigeon — compose — tab: next field · ctrl+g: attach file · ctrl+r: remove last attachment · ctrl+s: send · esc: cancel"
 	}
 	if m.addingAccount {
 		return "pigeon — add account — tab/shift+tab: field · ←/→: change security · ctrl+s: save · esc: cancel"
@@ -1222,6 +1233,8 @@ var helpSections = []helpSection{
 		Title: "Compose",
 		Rows: [][2]string{
 			{"tab", "next field (To / Cc / Subject / Body)"},
+			{"ctrl+g", "attach a file"},
+			{"ctrl+r", "remove the last attachment"},
 			{"ctrl+s", "send"},
 			{"esc", "cancel"},
 		},
