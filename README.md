@@ -113,9 +113,11 @@ pigeon message attachment save <slug> <uid> <index> <dest-path>  # save an attac
 
 pigeon folder list <slug>        # list an account's synced folders
 
-pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --subject, --body)
-pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body)
+pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --subject, --body, --attach)
+pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body, --attach)
 ```
+
+`--attach <path>` is repeatable, on both `send` and `reply`.
 
 Global flags (any subcommand): `--config`, `--db`, `--blobs`, `--log-level`,
 `--log-file`. Each defaults to the XDG config/cache directories when unset.
@@ -149,6 +151,9 @@ scroll); `pgup`/`pgdn` and `ctrl+d`/`ctrl+u` still scroll.
 
 In the message viewer: `r` reply, `R` reply-all, `t` toggle raw/rendered,
 `g` go to related messages, `a` save an attachment, `esc` back to list.
+
+While composing: `tab` next field, `ctrl+g` attach a file (prompts for a
+path), `ctrl+r` remove the last attachment, `ctrl+s` send, `esc` cancel.
 
 Press `?` inside the TUI for the full, context-aware list.
 
