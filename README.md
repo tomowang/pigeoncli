@@ -113,11 +113,12 @@ pigeon message attachment save <slug> <uid> <index> <dest-path>  # save an attac
 
 pigeon folder list <slug>        # list an account's synced folders
 
-pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --subject, --body, --attach)
-pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body, --attach)
+pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --bcc, --subject, --body, --attach)
+pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body, --attach, --bcc)
+pigeon compose forward <slug> <uid> --to <addr>  # forward a cached message, with its own attachments carried over (--cc, --bcc, --folder, --subject, --body, --attach)
 ```
 
-`--attach <path>` is repeatable, on both `send` and `reply`.
+`--attach <path>` and `--bcc <addr>` are repeatable, on all three commands.
 
 Global flags (any subcommand): `--config`, `--db`, `--blobs`, `--log-level`,
 `--log-file`. Each defaults to the XDG config/cache directories when unset.
@@ -149,11 +150,13 @@ message viewer, and act on the selected or open message. They take over the
 `d`/`u` paging keys there (the list's page up/down, the viewer's half-page
 scroll); `pgup`/`pgdn` and `ctrl+d`/`ctrl+u` still scroll.
 
-In the message viewer: `r` reply, `R` reply-all, `t` toggle raw/rendered,
-`g` go to related messages, `a` save an attachment, `esc` back to list.
+In the message viewer: `r` reply, `R` reply-all, `f` forward (carries over
+the original's own attachments), `t` toggle raw/rendered, `g` go to related
+messages, `a` save an attachment, `esc` back to list.
 
-While composing: `tab` next field, `ctrl+g` attach a file (prompts for a
-path), `ctrl+r` remove the last attachment, `ctrl+s` send, `esc` cancel.
+While composing: `tab` next field (To / Cc / Bcc / Subject / Body), `ctrl+g`
+attach a file (prompts for a path), `ctrl+r` remove the last attachment,
+`ctrl+s` send, `esc` cancel.
 
 Press `?` inside the TUI for the full, context-aware list.
 
