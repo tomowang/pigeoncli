@@ -1,6 +1,7 @@
 package mime
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ func TestBuildMessageRoundTrips(t *testing.T) {
 		"Thanks!\n\n> original text\n",
 		"orig-id@example.com",
 		"orig-id@example.com",
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("BuildMessage: %v", err)
@@ -45,5 +47,83 @@ func TestBuildMessageRoundTrips(t *testing.T) {
 	}
 	if !strings.Contains(plain, "Thanks!") || !strings.Contains(plain, "> original text") {
 		t.Fatalf("unexpected rendered body: %q", plain)
+	}
+}
+
+func TestBuildMessageWithAttachments(t *testing.T) {
+	raw, err := BuildMessage(
+		Recipient{Name: "Alice", Addr: "alice@example.com"},
+		[]Recipient{{Addr: "bob@example.com"}},
+		nil,
+		"Report",
+		"See attached.",
+		"", "",
+		[]OutgoingAttachment{
+			{Filename: "report.pdf", Data: []byte("%PDF-1.4 fake")},
+			{Filename: "notes.txt", Data: []byte("plain text notes")},
+			{Filename: "mystery.xyz", Data: []byte{0x00, 0x01, 0x02}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("BuildMessage: %v", err)
+	}
+
+	plain, err := PlainText(raw)
+	if err != nil {
+		t.Fatalf("PlainText: %v", err)
+	}
+	if !strings.Contains(plain, "See attached.") {
+		t.Fatalf("unexpected rendered body: %q", plain)
+	}
+
+	atts, err := Attachments(raw)
+	if err != nil {
+		t.Fatalf("Attachments: %v", err)
+	}
+	if len(atts) != 3 {
+		t.Fatalf("got %d attachments, want 3: %+v", len(atts), atts)
+	}
+	want := map[string]string{
+		"report.pdf":  "application/pdf",
+		"notes.txt":   "text/plain",
+		"mystery.xyz": "application/octet-stream", // unrecognized extension
+	}
+	for _, a := range atts {
+		if ct, ok := want[a.Filename]; !ok {
+			t.Errorf("unexpected attachment %q", a.Filename)
+		} else if a.ContentType != ct {
+			t.Errorf("%s: ContentType = %q, want %q", a.Filename, a.ContentType, ct)
+		}
+	}
+
+	// Round-trip the bytes back out, not just the metadata.
+	dir := t.TempDir()
+	dest := dir + "/out.pdf"
+	if err := SaveAttachment(raw, 0, dest); err != nil {
+		t.Fatalf("SaveAttachment: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "%PDF-1.4 fake" {
+		t.Fatalf("saved attachment content = %q", got)
+	}
+}
+
+func TestBuildMessageWithoutAttachmentsIsSinglePart(t *testing.T) {
+	raw, err := BuildMessage(Recipient{Addr: "alice@example.com"}, nil, nil, "Hi", "body", "", "", nil)
+	if err != nil {
+		t.Fatalf("BuildMessage: %v", err)
+	}
+	atts, err := Attachments(raw)
+	if err != nil {
+		t.Fatalf("Attachments: %v", err)
+	}
+	if len(atts) != 0 {
+		t.Fatalf("expected no attachments, got %+v", atts)
+	}
+	if strings.Contains(string(raw), "multipart/mixed") {
+		t.Fatal("a message with no attachments shouldn't be multipart")
 	}
 }

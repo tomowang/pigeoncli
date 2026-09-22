@@ -3,6 +3,8 @@ package compose
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tomowang/pigeoncli/internal/auth"
@@ -17,12 +19,55 @@ import (
 // Draft is an editable outgoing message. The TUI's compose pane renders
 // and edits a Draft directly — no reply/quoting logic lives there.
 type Draft struct {
-	To         []string
-	Cc         []string
-	Subject    string
-	Body       string
-	InReplyTo  string // orig Message-ID being replied to, empty for a new message
-	References string
+	To          []string
+	Cc          []string
+	Subject     string
+	Body        string
+	InReplyTo   string // orig Message-ID being replied to, empty for a new message
+	References  string
+	Attachments []Attachment
+}
+
+// Attachment is a file attached to an outgoing Draft: a filename and its
+// raw bytes, normally produced by NewAttachmentFromFile. It's a local DTO
+// mirroring internal/mime.OutgoingAttachment field-for-field, kept separate
+// so internal/mime's types don't leak into the public core surface.
+type Attachment struct {
+	Filename string
+	Data     []byte
+}
+
+// MaxAttachmentSize is the largest file NewAttachmentFromFile will read
+// into a Draft. It's well under common SMTP submission limits (typically
+// 25-35MB — attachments inflate by about a third once base64-encoded),
+// while keeping a single attachment from using an outsized amount of
+// memory before it's even sent.
+const MaxAttachmentSize = 20 << 20 // 20 MiB
+
+// ErrAttachmentTooLarge is returned by NewAttachmentFromFile for a file
+// over MaxAttachmentSize.
+var ErrAttachmentTooLarge = fmt.Errorf("attachment exceeds the %d MiB limit", MaxAttachmentSize>>20)
+
+// NewAttachmentFromFile reads path into an Attachment named after its base
+// name. It's the one place a file from disk becomes part of a Draft, used
+// by both internal/cli and internal/tui so the size limit and directory
+// check apply everywhere a file gets attached.
+func NewAttachmentFromFile(path string) (Attachment, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Attachment{}, err
+	}
+	if info.IsDir() {
+		return Attachment{}, fmt.Errorf("%s is a directory, not a file", path)
+	}
+	if info.Size() > MaxAttachmentSize {
+		return Attachment{}, fmt.Errorf("%s: %w", path, ErrAttachmentTooLarge)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Attachment{}, err
+	}
+	return Attachment{Filename: filepath.Base(path), Data: data}, nil
 }
 
 // Service builds reply drafts and sends them.
@@ -135,7 +180,7 @@ func quote(orig message.Message, plainText string) string {
 func (s *Service) Send(ctx context.Context, cfg config.Account, draft Draft) error {
 	from := mime.Recipient{Name: cfg.DisplayName, Addr: cfg.Email}
 	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), draft.Subject, draft.Body,
-		draft.InReplyTo, draft.References)
+		draft.InReplyTo, draft.References, outgoingAttachments(draft.Attachments))
 	if err != nil {
 		return fmt.Errorf("build message: %w", err)
 	}
@@ -163,6 +208,17 @@ func recipients(addrs []string) []mime.Recipient {
 	out := make([]mime.Recipient, len(addrs))
 	for i, a := range addrs {
 		out[i] = mime.Recipient{Addr: a}
+	}
+	return out
+}
+
+func outgoingAttachments(atts []Attachment) []mime.OutgoingAttachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]mime.OutgoingAttachment, len(atts))
+	for i, a := range atts {
+		out[i] = mime.OutgoingAttachment{Filename: a.Filename, Data: a.Data}
 	}
 	return out
 }

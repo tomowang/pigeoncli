@@ -2,6 +2,9 @@ package compose
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +12,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/config"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/core/signature"
+	"github.com/tomowang/pigeoncli/internal/mime"
 	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
 
@@ -140,5 +144,65 @@ func TestNewMessageWithoutSignatureServiceIsEmpty(t *testing.T) {
 	d := svc.NewMessage(context.Background(), cfg)
 	if d.Body != "" {
 		t.Fatalf("expected empty body, got %q", d.Body)
+	}
+}
+
+func TestNewAttachmentFromFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	att, err := NewAttachmentFromFile(path)
+	if err != nil {
+		t.Fatalf("NewAttachmentFromFile: %v", err)
+	}
+	if att.Filename != "notes.txt" || string(att.Data) != "hello" {
+		t.Fatalf("got %+v", att)
+	}
+}
+
+func TestNewAttachmentFromFileErrors(t *testing.T) {
+	dir := t.TempDir()
+
+	if _, err := NewAttachmentFromFile(filepath.Join(dir, "nope")); err == nil {
+		t.Fatal("expected an error for a missing file")
+	}
+	if _, err := NewAttachmentFromFile(dir); err == nil {
+		t.Fatal("expected an error for a directory")
+	}
+
+	big := filepath.Join(dir, "big.bin")
+	if err := os.WriteFile(big, make([]byte, MaxAttachmentSize+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAttachmentFromFile(big); !errors.Is(err, ErrAttachmentTooLarge) {
+		t.Fatalf("got %v, want ErrAttachmentTooLarge", err)
+	}
+}
+
+func TestSendIncludesAttachments(t *testing.T) {
+	// Send dials real IMAP/SMTP servers, which this test doesn't stand up;
+	// it only checks that the draft's attachments survive into the built
+	// MIME message, via the same helper Send uses.
+	draft := Draft{
+		To:          []string{"bob@example.com"},
+		Subject:     "Hi",
+		Body:        "See attached.",
+		Attachments: []Attachment{{Filename: "notes.txt", Data: []byte("hello")}},
+	}
+	from := mime.Recipient{Addr: "me@example.com"}
+	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), draft.Subject, draft.Body,
+		draft.InReplyTo, draft.References, outgoingAttachments(draft.Attachments))
+	if err != nil {
+		t.Fatalf("BuildMessage: %v", err)
+	}
+	atts, err := mime.Attachments(raw)
+	if err != nil {
+		t.Fatalf("Attachments: %v", err)
+	}
+	if len(atts) != 1 || atts[0].Filename != "notes.txt" {
+		t.Fatalf("got %+v", atts)
 	}
 }
