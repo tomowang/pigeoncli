@@ -59,14 +59,30 @@ func Attachments(raw []byte) ([]Attachment, error) {
 // (0-based, in the same order Attachments returns them) in raw to
 // destPath.
 func SaveAttachment(raw []byte, index int, destPath string) error {
+	body, err := AttachmentData(raw, index)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(destPath, body, 0o600); err != nil {
+		return fmt.Errorf("write attachment: %w", err)
+	}
+	return nil
+}
+
+// AttachmentData returns the decoded bytes of the index-th attachment part
+// (0-based, in the same order Attachments returns them) in raw — the same
+// lookup SaveAttachment uses, for callers (e.g. forwarding a message) that
+// want the bytes in memory rather than written to a file.
+func AttachmentData(raw []byte, index int) ([]byte, error) {
 	entity, err := message.Read(bytes.NewReader(raw))
 	if err != nil && !message.IsUnknownCharset(err) && !message.IsUnknownEncoding(err) {
-		return fmt.Errorf("parse message: %w", err)
+		return nil, fmt.Errorf("parse message: %w", err)
 	}
 
 	var (
 		found bool
 		n     int
+		data  []byte
 	)
 	walkErr := entity.Walk(func(path []int, e *message.Entity, err error) error {
 		if err != nil || found {
@@ -85,18 +101,16 @@ func SaveAttachment(raw []byte, index int, destPath string) error {
 		if readErr != nil {
 			return fmt.Errorf("read attachment: %w", readErr)
 		}
-		if writeErr := os.WriteFile(destPath, body, 0o600); writeErr != nil {
-			return fmt.Errorf("write attachment: %w", writeErr)
-		}
+		data = body
 		return nil
 	})
 	if walkErr != nil {
-		return fmt.Errorf("walk message: %w", walkErr)
+		return nil, fmt.Errorf("walk message: %w", walkErr)
 	}
 	if !found {
-		return fmt.Errorf("attachment index %d not found", index)
+		return nil, fmt.Errorf("attachment index %d not found", index)
 	}
-	return nil
+	return data, nil
 }
 
 // attachmentFilename returns e's attachment filename — from

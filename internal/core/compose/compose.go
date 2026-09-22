@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,11 +20,14 @@ import (
 // Draft is an editable outgoing message. The TUI's compose pane renders
 // and edits a Draft directly — no reply/quoting logic lives there.
 type Draft struct {
-	To          []string
-	Cc          []string
-	Subject     string
-	Body        string
-	InReplyTo   string // orig Message-ID being replied to, empty for a new message
+	To      []string
+	Cc      []string
+	Bcc     []string // never appears in the built message's headers; SMTP recipients only
+	Subject string
+	Body    string
+	// InReplyTo and References are the orig Message-ID this draft is
+	// replying to; both empty for a new message or a forward.
+	InReplyTo   string
 	References  string
 	Attachments []Attachment
 }
@@ -98,6 +102,20 @@ func (s *Service) NewReply(ctx context.Context, cfg config.Account, orig message
 	return draft
 }
 
+// NewForward builds a draft forwarding orig to a recipient still to be
+// filled in: empty To, a "Fwd: " subject (not doubled if orig is already a
+// forward), a forwarded-message header block above orig's plain text, and
+// orig's attachments carried over — extracted from origBody.Raw, best
+// effort: one that fails to extract is logged and left off rather than
+// failing the whole forward. cfg's default signature is appended if one is
+// configured. Unlike a reply, a forward carries no In-Reply-To/References,
+// since it starts a new thread rather than continuing orig's.
+func (s *Service) NewForward(ctx context.Context, cfg config.Account, orig message.Message, origBody message.Body) Draft {
+	draft := buildForwardDraft(orig, origBody)
+	draft.Body = s.appendSignature(ctx, cfg, draft.Body)
+	return draft
+}
+
 // NewMessage builds an empty draft for composing a new message from
 // scratch (no recipients, subject, or quoted body), with cfg's default
 // signature pre-filled if one is configured.
@@ -157,6 +175,58 @@ func buildReplyDraft(cfg config.Account, orig message.Message, origBody message.
 	}
 }
 
+// buildForwardDraft is NewForward's pure part: subject, header block, and
+// attachment extraction, with no signature or other side effects, kept
+// separate so it's cheap to test.
+func buildForwardDraft(orig message.Message, origBody message.Body) Draft {
+	subject := orig.Subject
+	lower := strings.ToLower(subject)
+	if !strings.HasPrefix(lower, "fwd:") && !strings.HasPrefix(lower, "fw:") {
+		subject = "Fwd: " + subject
+	}
+
+	from := orig.FromAddr
+	if orig.FromName != "" {
+		from = fmt.Sprintf("%s <%s>", orig.FromName, orig.FromAddr)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("---------- Forwarded message ----------\n")
+	fmt.Fprintf(&sb, "From: %s\n", from)
+	fmt.Fprintf(&sb, "Date: %s\n", orig.Date.Format("Jan 2, 2006 at 3:04 PM"))
+	fmt.Fprintf(&sb, "Subject: %s\n", orig.Subject)
+	if len(orig.ToAddrs) > 0 {
+		fmt.Fprintf(&sb, "To: %s\n", strings.Join(orig.ToAddrs, ", "))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(origBody.PlainText)
+
+	return Draft{
+		Subject:     subject,
+		Body:        sb.String(),
+		Attachments: forwardAttachments(origBody),
+	}
+}
+
+// forwardAttachments extracts origBody's attachments (by index, from its
+// raw source) into Draft-ready Attachments. One that fails to extract is
+// logged and skipped, not fatal to the forward.
+func forwardAttachments(origBody message.Body) []Attachment {
+	if len(origBody.Attachments) == 0 {
+		return nil
+	}
+	out := make([]Attachment, 0, len(origBody.Attachments))
+	for _, a := range origBody.Attachments {
+		data, err := mime.AttachmentData(origBody.Raw, a.Index)
+		if err != nil {
+			slog.Warn("extract attachment for forward failed", "filename", a.Filename, "err", err)
+			continue
+		}
+		out = append(out, Attachment{Filename: a.Filename, Data: data})
+	}
+	return out
+}
+
 func quote(orig message.Message, plainText string) string {
 	who := orig.FromName
 	if who == "" {
@@ -190,7 +260,11 @@ func (s *Service) Send(ctx context.Context, cfg config.Account, draft Draft) err
 		return err
 	}
 	opts := smtp.DialOptions{Host: cfg.SMTP.Host, Port: cfg.SMTP.Port, TLS: cfg.SMTP.TLS}
-	allRecipients := append(append([]string{}, draft.To...), draft.Cc...)
+	// draft.Bcc is deliberately never passed to mime.BuildMessage: it's an
+	// SMTP envelope recipient only, so it's invisible in the headers of the
+	// single copy sent to every recipient (To, Cc, and Bcc alike) — nobody
+	// sees who else was bcc'd.
+	allRecipients := append(append(append([]string{}, draft.To...), draft.Cc...), draft.Bcc...)
 	if err := smtp.Send(ctx, opts, provider, cfg.Email, allRecipients, raw); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}

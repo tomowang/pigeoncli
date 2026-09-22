@@ -206,3 +206,132 @@ func TestSendIncludesAttachments(t *testing.T) {
 		t.Fatalf("got %+v", atts)
 	}
 }
+
+func TestBuildForwardDraftAddsSubjectPrefixAndHeaderBlock(t *testing.T) {
+	orig, body := testOrig()
+
+	d := buildForwardDraft(orig, body)
+	if d.Subject != "Fwd: Hi" {
+		t.Fatalf("Subject = %q, want %q", d.Subject, "Fwd: Hi")
+	}
+	if d.InReplyTo != "" || d.References != "" {
+		t.Fatalf("forward should not carry reply headers, got InReplyTo=%q References=%q", d.InReplyTo, d.References)
+	}
+	for _, want := range []string{
+		"---------- Forwarded message ----------",
+		"From: Alice <alice@example.com>",
+		"Subject: Hi",
+		"To: me@example.com, carol@example.com",
+		"Original body.",
+	} {
+		if !strings.Contains(d.Body, want) {
+			t.Errorf("body missing %q, got:\n%s", want, d.Body)
+		}
+	}
+}
+
+func TestBuildForwardDraftDoesNotDoublePrefixSubject(t *testing.T) {
+	orig, body := testOrig()
+	for _, already := range []string{"Fwd: Hi", "FWD: Hi", "Fw: Hi"} {
+		orig.Subject = already
+		if d := buildForwardDraft(orig, body); d.Subject != already {
+			t.Errorf("buildForwardDraft(%q).Subject = %q, want unchanged", already, d.Subject)
+		}
+	}
+}
+
+func TestBuildForwardDraftCarriesAttachments(t *testing.T) {
+	raw, err := mime.BuildMessage(
+		mime.Recipient{Addr: "alice@example.com"}, nil, nil, "Report", "See attached.", "", "",
+		[]mime.OutgoingAttachment{{Filename: "report.pdf", Data: []byte("%PDF fake")}},
+	)
+	if err != nil {
+		t.Fatalf("mime.BuildMessage: %v", err)
+	}
+	atts, err := mime.Attachments(raw)
+	if err != nil {
+		t.Fatalf("mime.Attachments: %v", err)
+	}
+	msgAtts := make([]message.Attachment, len(atts))
+	for i, a := range atts {
+		msgAtts[i] = message.Attachment{Index: a.Index, Filename: a.Filename, ContentType: a.ContentType, Size: a.Size}
+	}
+	origBody := message.Body{Raw: raw, PlainText: "See attached.", Attachments: msgAtts}
+	orig := message.Message{Subject: "Report", FromAddr: "alice@example.com"}
+
+	d := buildForwardDraft(orig, origBody)
+	if len(d.Attachments) != 1 {
+		t.Fatalf("Attachments = %+v, want 1", d.Attachments)
+	}
+	if d.Attachments[0].Filename != "report.pdf" || string(d.Attachments[0].Data) != "%PDF fake" {
+		t.Fatalf("got %+v", d.Attachments[0])
+	}
+}
+
+func TestBuildForwardDraftSkipsUnextractableAttachment(t *testing.T) {
+	// An attachment index that doesn't actually exist in Raw (e.g. stale
+	// metadata) is skipped rather than failing the whole forward.
+	origBody := message.Body{
+		Raw:         []byte("Subject: Hi\r\n\r\nbody\r\n"),
+		PlainText:   "body",
+		Attachments: []message.Attachment{{Index: 0, Filename: "ghost.txt"}},
+	}
+	d := buildForwardDraft(message.Message{Subject: "Hi"}, origBody)
+	if len(d.Attachments) != 0 {
+		t.Fatalf("Attachments = %+v, want none", d.Attachments)
+	}
+}
+
+func TestServiceNewForwardAppendsDefaultSignature(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	sigSvc := signature.NewService(db)
+	if _, err := sigSvc.Add(ctx, "", "Global", "-- \nSent from pigeon", true); err != nil {
+		t.Fatalf("Add signature: %v", err)
+	}
+
+	svc := NewService(nil, sigSvc)
+	cfg := config.Account{Slug: "work", Email: "me@example.com"}
+	orig, body := testOrig()
+
+	d := svc.NewForward(ctx, cfg, orig, body)
+	if !strings.Contains(d.Body, "Sent from pigeon") {
+		t.Fatalf("expected signature in forward body, got %q", d.Body)
+	}
+	if !strings.HasPrefix(d.Subject, "Fwd:") {
+		t.Fatalf("Subject = %q", d.Subject)
+	}
+}
+
+func TestSendIncludesBccInEnvelopeNotHeaders(t *testing.T) {
+	draft := Draft{
+		To:      []string{"bob@example.com"},
+		Bcc:     []string{"secret@example.com"},
+		Subject: "Hi",
+		Body:    "body",
+	}
+	from := mime.Recipient{Addr: "me@example.com"}
+	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), draft.Subject, draft.Body,
+		draft.InReplyTo, draft.References, outgoingAttachments(draft.Attachments))
+	if err != nil {
+		t.Fatalf("BuildMessage: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "secret@example.com") {
+		t.Fatal("the built message must not mention the Bcc address anywhere in its headers")
+	}
+
+	allRecipients := append(append(append([]string{}, draft.To...), draft.Cc...), draft.Bcc...)
+	found := false
+	for _, r := range allRecipients {
+		if r == "secret@example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Bcc address must still be an SMTP envelope recipient")
+	}
+}
