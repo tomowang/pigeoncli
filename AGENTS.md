@@ -11,7 +11,10 @@ make test    # go test ./...
 make vet     # go vet ./...
 make lint    # golangci-lint run
 make tidy    # go mod tidy
+make hooks   # wire up the repo's pre-commit hook (run once per clone)
 ```
+
+`make hooks` points git at the tracked `.githooks/` dir so `make lint` runs automatically before every commit (bypass with `git commit --no-verify` if truly needed). `core.hooksPath` is local git config, not committed, so this is a one-time step per clone.
 
 Single package/test: `go test ./internal/core/account/...` (or `-run TestName` once tests exist).
 

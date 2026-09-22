@@ -7,7 +7,7 @@ LDFLAGS    := -X $(MODULE)/internal/buildinfo.Version=$(VERSION) \
               -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) \
               -X $(MODULE)/internal/buildinfo.Date=$(DATE)
 
-.PHONY: build run test vet lint tidy clean release-check release-dry-run
+.PHONY: build run test vet lint tidy clean release-check release-dry-run hooks
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/pigeon
@@ -26,6 +26,11 @@ lint:
 
 tidy:
 	go mod tidy
+
+# hooks points git at the repo's tracked .githooks/ dir (run once per clone) so
+# `make lint` runs automatically before every commit.
+hooks:
+	git config core.hooksPath .githooks
 
 clean:
 	rm -rf bin/

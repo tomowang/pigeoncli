@@ -14,9 +14,6 @@ import (
 	"github.com/tomowang/pigeoncli/internal/storage/sqlite"
 )
 
-// seenFlag is the IMAP flag marking a message as read.
-const seenFlag = `\Seen`
-
 // junkSpecialUse and inboxSpecialUse are the RFC 6154 special-use
 // attributes identifying an account's Junk/Spam and Inbox folders.
 const (

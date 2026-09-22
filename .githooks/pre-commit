@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs `make lint` before allowing a commit. Bypass with `git commit --no-verify`
+# if you really need to (e.g. WIP commit on a scratch branch).
+
+set -e
+
+echo "pre-commit: running make lint..."
+make lint
