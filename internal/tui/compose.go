@@ -26,6 +26,19 @@ func (m App) startReply(replyAll bool) (tea.Model, tea.Cmd) {
 	return m.enterCompose(draft, composeFieldBody), nil
 }
 
+// startForward builds a forward draft for the message currently being
+// viewed and switches into the compose pane, focused on To since (unlike a
+// reply) nothing is addressed yet. All subject/header-block/attachment
+// logic lives in core/compose.Service.NewForward.
+func (m App) startForward() (tea.Model, tea.Cmd) {
+	if m.viewingMsg == nil {
+		return m, nil
+	}
+	draft := m.composeSvc.NewForward(m.ctx, m.selectedAccount, *m.viewingMsg, m.viewBody)
+	m.viewingMsg = nil
+	return m.enterCompose(draft, composeFieldTo), nil
+}
+
 // startNewMessage builds an empty draft (just the account's default
 // signature, if any) and switches into the compose pane. Focus starts on
 // To, since there's nothing pre-filled to edit.
@@ -44,6 +57,10 @@ func (m App) enterCompose(draft compose.Draft, field composeField) App {
 	m.composeCc = textinput.New()
 	m.composeCc.Prompt = "Cc: "
 	m.composeCc.SetValue(strings.Join(draft.Cc, ", "))
+
+	m.composeBcc = textinput.New()
+	m.composeBcc.Prompt = "Bcc: "
+	m.composeBcc.SetValue(strings.Join(draft.Bcc, ", "))
 
 	m.composeSubject = textinput.New()
 	m.composeSubject.Prompt = "Subject: "
@@ -65,6 +82,8 @@ func (m App) enterCompose(draft compose.Draft, field composeField) App {
 		m.composeTo.Focus()
 	case composeFieldCc:
 		m.composeCc.Focus()
+	case composeFieldBcc:
+		m.composeBcc.Focus()
 	case composeFieldSubject:
 		m.composeSubject.Focus()
 	case composeFieldBody:
@@ -106,6 +125,8 @@ func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.composeTo, cmd = m.composeTo.Update(msg)
 	case composeFieldCc:
 		m.composeCc, cmd = m.composeCc.Update(msg)
+	case composeFieldBcc:
+		m.composeBcc, cmd = m.composeBcc.Update(msg)
 	case composeFieldSubject:
 		m.composeSubject, cmd = m.composeSubject.Update(msg)
 	case composeFieldBody:
@@ -178,15 +199,18 @@ func (m App) removeLastAttachment() (App, tea.Cmd) {
 func (m App) cycleComposeField() App {
 	m.composeTo.Blur()
 	m.composeCc.Blur()
+	m.composeBcc.Blur()
 	m.composeSubject.Blur()
 	m.composeBody.Blur()
 
-	m.composeField = (m.composeField + 1) % 4
+	m.composeField = (m.composeField + 1) % composeFieldCount
 	switch m.composeField {
 	case composeFieldTo:
 		m.composeTo.Focus()
 	case composeFieldCc:
 		m.composeCc.Focus()
+	case composeFieldBcc:
+		m.composeBcc.Focus()
 	case composeFieldSubject:
 		m.composeSubject.Focus()
 	case composeFieldBody:
@@ -199,6 +223,7 @@ func (m App) sendCompose() (tea.Model, tea.Cmd) {
 	draft := compose.Draft{
 		To:          splitAddrs(m.composeTo.Value()),
 		Cc:          splitAddrs(m.composeCc.Value()),
+		Bcc:         splitAddrs(m.composeBcc.Value()),
 		Subject:     m.composeSubject.Value(),
 		Body:        m.composeBody.Value(),
 		InReplyTo:   m.composeInReplyTo,
@@ -234,6 +259,7 @@ func (m App) viewCompose() string {
 	fields := lipgloss.JoinVertical(lipgloss.Left,
 		m.composeTo.View(),
 		m.composeCc.View(),
+		m.composeBcc.View(),
 		m.composeSubject.View(),
 		m.composeBody.View(),
 	)

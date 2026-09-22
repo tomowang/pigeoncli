@@ -45,9 +45,14 @@ type composeField int
 const (
 	composeFieldTo composeField = iota
 	composeFieldCc
+	composeFieldBcc
 	composeFieldSubject
 	composeFieldBody
 )
+
+// composeFieldCount is the number of fields cycleComposeField cycles
+// through.
+const composeFieldCount = composeFieldBody + 1
 
 // App is the root Bubbletea model: an account list, a folder tree pane, and
 // a message list pane side by side, plus a status bar. Opening a message
@@ -126,6 +131,7 @@ type App struct {
 	composeField       composeField
 	composeTo          textinput.Model
 	composeCc          textinput.Model
+	composeBcc         textinput.Model
 	composeSubject     textinput.Model
 	composeBody        textarea.Model
 	composeInReplyTo   string
@@ -917,6 +923,8 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startReply(false)
 	case "R":
 		return m.startReply(true)
+	case "f":
+		return m.startForward()
 	case "g":
 		if m.viewingMsg == nil {
 			return m, nil
@@ -997,13 +1005,14 @@ func (m *App) layout() {
 	if m.composing {
 		m.composeTo.Width = max(m.width-4, 10)
 		m.composeCc.Width = max(m.width-4, 10)
+		m.composeBcc.Width = max(m.width-4, 10)
 		m.composeSubject.Width = max(m.width-4, 10)
 		m.composeBody.SetWidth(max(m.width-2, 10))
 		attachmentsLine := 0
 		if len(m.composeAttachments) > 0 {
 			attachmentsLine = 1
 		}
-		m.composeBody.SetHeight(max(m.height-6-attachmentsLine, 3)) // reserve To/Cc/Subject + attachments + status bar + shortcuts row
+		m.composeBody.SetHeight(max(m.height-7-attachmentsLine, 3)) // reserve To/Cc/Bcc/Subject + attachments + status bar + shortcuts row
 		m.attachFileInput.Width = max(m.width-4, 10)
 	}
 
@@ -1134,7 +1143,7 @@ func (m App) shortcutsLine() string {
 		if m.viewingRaw {
 			mode = "raw"
 		}
-		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · e: archive · d: delete · m: move · u: read · *: star · !: spam · esc: back · q: quit", mode)
+		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · f: forward · e: archive · d: delete · m: move · u: read · *: star · !: spam · esc: back · q: quit", mode)
 	}
 	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · e: archive · d: delete · m: move · ?: help · L: log · q: quit"
 }
@@ -1223,6 +1232,7 @@ var helpSections = []helpSection{
 		Rows: [][2]string{
 			{"r", "reply"},
 			{"R", "reply-all"},
+			{"f", "forward"},
 			{"t", "toggle raw / rendered"},
 			{"g", "go to related messages (In-Reply-To / References)"},
 			{"a", "save an attachment"},
@@ -1232,7 +1242,7 @@ var helpSections = []helpSection{
 	{
 		Title: "Compose",
 		Rows: [][2]string{
-			{"tab", "next field (To / Cc / Subject / Body)"},
+			{"tab", "next field (To / Cc / Bcc / Subject / Body)"},
 			{"ctrl+g", "attach a file"},
 			{"ctrl+r", "remove the last attachment"},
 			{"ctrl+s", "send"},
