@@ -22,7 +22,7 @@ func newComposeCmd() *cobra.Command {
 }
 
 func newComposeSendCmd() *cobra.Command {
-	var to, cc []string
+	var to, cc, attach []string
 	var subject, body string
 	cmd := &cobra.Command{
 		Use:   "send <slug>",
@@ -32,6 +32,10 @@ func newComposeSendCmd() *cobra.Command {
 			slug := args[0]
 			if len(to) == 0 {
 				return fmt.Errorf("at least one --to recipient is required")
+			}
+			attachments, err := loadAttachments(attach)
+			if err != nil {
+				return err
 			}
 
 			acctSvc, err := newAccountService()
@@ -64,6 +68,7 @@ func newComposeSendCmd() *cobra.Command {
 			draft.Cc = cc
 			draft.Subject = subject
 			draft.Body = joinBody(bodyText, draft.Body)
+			draft.Attachments = attachments
 
 			if err := composeSvc.Send(cmd.Context(), cfg, draft); err != nil {
 				return err
@@ -76,12 +81,14 @@ func newComposeSendCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&cc, "cc", nil, "cc address (repeatable)")
 	cmd.Flags().StringVar(&subject, "subject", "", "message subject")
 	cmd.Flags().StringVar(&body, "body", "", "message body (default: read from stdin)")
+	cmd.Flags().StringArrayVar(&attach, "attach", nil, "path to a file to attach (repeatable)")
 	return cmd
 }
 
 func newComposeReplyCmd() *cobra.Command {
 	var folderPath, subject, body string
 	var replyAll bool
+	var attach []string
 	cmd := &cobra.Command{
 		Use:   "reply <slug> <uid>",
 		Short: "Reply to a cached message",
@@ -93,6 +100,10 @@ func newComposeReplyCmd() *cobra.Command {
 				return fmt.Errorf("invalid uid %q: %w", args[1], err)
 			}
 			uid := uint32(uid64)
+			attachments, err := loadAttachments(attach)
+			if err != nil {
+				return err
+			}
 
 			acctSvc, err := newAccountService()
 			if err != nil {
@@ -146,6 +157,7 @@ func newComposeReplyCmd() *cobra.Command {
 				draft.Subject = subject
 			}
 			draft.Body = joinBody(bodyText, draft.Body)
+			draft.Attachments = attachments
 
 			if err := composeSvc.Send(cmd.Context(), cfg, draft); err != nil {
 				return err
@@ -158,7 +170,24 @@ func newComposeReplyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&replyAll, "all", false, "reply to all original recipients, not just the sender")
 	cmd.Flags().StringVar(&subject, "subject", "", "override the default \"Re: ...\" subject")
 	cmd.Flags().StringVar(&body, "body", "", "text to add above the quoted original (default: read from stdin)")
+	cmd.Flags().StringArrayVar(&attach, "attach", nil, "path to a file to attach (repeatable)")
 	return cmd
+}
+
+// loadAttachments reads each path in paths into a compose.Attachment.
+func loadAttachments(paths []string) ([]compose.Attachment, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	out := make([]compose.Attachment, len(paths))
+	for i, p := range paths {
+		att, err := compose.NewAttachmentFromFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("attach %s: %w", p, err)
+		}
+		out[i] = att
+	}
+	return out, nil
 }
 
 // joinBody combines a user-supplied body with the account's default

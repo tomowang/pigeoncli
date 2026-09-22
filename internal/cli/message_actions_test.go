@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -58,5 +59,28 @@ func TestConfirmOnlyAcceptsExplicitYes(t *testing.T) {
 		if ask(no) {
 			t.Errorf("confirm(%q) = true, want false", no)
 		}
+	}
+}
+
+func TestLoadAttachments(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/notes.txt"
+	if err := os.WriteFile(path, []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	atts, err := loadAttachments([]string{path})
+	if err != nil {
+		t.Fatalf("loadAttachments: %v", err)
+	}
+	if len(atts) != 1 || atts[0].Filename != "notes.txt" || string(atts[0].Data) != "hi" {
+		t.Fatalf("got %+v", atts)
+	}
+
+	if _, err := loadAttachments([]string{dir + "/nope"}); err == nil {
+		t.Fatal("expected an error for a missing file")
+	}
+	if got, err := loadAttachments(nil); got != nil || err != nil {
+		t.Fatalf("loadAttachments(nil) = %v, %v", got, err)
 	}
 }
