@@ -28,7 +28,7 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-brews:
+homebrew_casks:
   - name: pigeon
     repository:
       owner: tomowang
@@ -36,9 +36,17 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/tomowang/pigeoncli
     description: Local email client for the terminal
-    license: MIT
-    test: |
-      system "#{bin}/pigeon", "version"
+    binaries:
+      - pigeon
+    # pigeon isn't code-signed/notarized, so Gatekeeper quarantines it on
+    # first install; strip that like Homebrew's cask-only-binary formulas do.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "#{staged_path}/pigeon"]
+          end
 
 changelog:
   sort: asc

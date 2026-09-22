@@ -22,7 +22,7 @@ Early scaffold (Phase 0). Expect missing features and rough edges — see
 With [Homebrew](https://brew.sh) (macOS and Linux):
 
 ```
-brew install tomowang/tap/pigeon
+brew install --cask tomowang/tap/pigeon
 ```
 
 With Go 1.27+:
