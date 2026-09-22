@@ -1125,7 +1125,7 @@ func (m App) shortcutsLine() string {
 		}
 		return fmt.Sprintf("pigeon — viewing (%s) — r: reply · R: reply-all · e: archive · d: delete · m: move · u: read · *: star · !: spam · esc: back · q: quit", mode)
 	}
-	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · e: archive · d: delete · m: move · ?: help · q: quit"
+	return "pigeon — tab: switch pane · enter: open · c: compose · s: sync · /: search · e: archive · d: delete · m: move · ?: help · L: log · q: quit"
 }
 
 // statusBarText returns what the status bar (the row above shortcuts) should
