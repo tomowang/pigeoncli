@@ -63,29 +63,38 @@ func newMessageListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if jsonOut {
-				return writeJSON(cmd.OutOrStdout(), toJSONMessages(msgs))
-			}
-			if len(msgs) == 0 {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No messages cached in %q. Sync with `pigeon sync %s`.\n", folderPath, slug)
-				return nil
-			}
-
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "UID\tFLAGS\tFROM\tSUBJECT\tDATE")
-			for _, m := range msgs {
-				from := m.FromAddr
-				if m.FromName != "" {
-					from = m.FromName
-				}
-				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
-					m.UID, formatFlags(m.Flags), from, m.Subject, m.Date.Format("2006-01-02 15:04"))
-			}
-			return w.Flush()
+			return renderMessages(cmd, msgs, jsonOut,
+				fmt.Sprintf("No messages cached in %q. Sync with `pigeon sync %s`.", folderPath, slug))
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON instead of a table")
 	return cmd
+}
+
+// renderMessages writes msgs as a table (or, with jsonOut, JSON) to cmd's
+// stdout. emptyMsg is shown in place of the table when msgs is empty;
+// JSON mode ignores it and always emits [], since a script depending on
+// valid JSON shouldn't have to special-case an empty result.
+func renderMessages(cmd *cobra.Command, msgs []message.Message, jsonOut bool, emptyMsg string) error {
+	if jsonOut {
+		return writeJSON(cmd.OutOrStdout(), toJSONMessages(msgs))
+	}
+	if len(msgs) == 0 {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), emptyMsg)
+		return nil
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "UID\tFLAGS\tFROM\tSUBJECT\tDATE")
+	for _, m := range msgs {
+		from := m.FromAddr
+		if m.FromName != "" {
+			from = m.FromName
+		}
+		_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
+			m.UID, formatFlags(m.Flags), from, m.Subject, m.Date.Format("2006-01-02 15:04"))
+	}
+	return w.Flush()
 }
 
 func newMessageShowCmd() *cobra.Command {
