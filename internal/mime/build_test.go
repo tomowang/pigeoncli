@@ -13,6 +13,7 @@ func TestBuildMessageRoundTrips(t *testing.T) {
 		Recipient{Name: "Alice", Addr: "alice@example.com"},
 		[]Recipient{{Name: "Bob", Addr: "bob@example.com"}},
 		[]Recipient{{Addr: "carol@example.com"}},
+		nil,
 		"Re: Hi",
 		"Thanks!\n\n> original text\n",
 		"orig-id@example.com",
@@ -54,7 +55,7 @@ func TestBuildMessageWithAttachments(t *testing.T) {
 	raw, err := BuildMessage(
 		Recipient{Name: "Alice", Addr: "alice@example.com"},
 		[]Recipient{{Addr: "bob@example.com"}},
-		nil,
+		nil, nil,
 		"Report",
 		"See attached.",
 		"", "",
@@ -112,7 +113,7 @@ func TestBuildMessageWithAttachments(t *testing.T) {
 }
 
 func TestBuildMessageWithoutAttachmentsIsSinglePart(t *testing.T) {
-	raw, err := BuildMessage(Recipient{Addr: "alice@example.com"}, nil, nil, "Hi", "body", "", "", nil)
+	raw, err := BuildMessage(Recipient{Addr: "alice@example.com"}, nil, nil, nil, "Hi", "body", "", "", nil)
 	if err != nil {
 		t.Fatalf("BuildMessage: %v", err)
 	}
@@ -125,5 +126,43 @@ func TestBuildMessageWithoutAttachmentsIsSinglePart(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "multipart/mixed") {
 		t.Fatal("a message with no attachments shouldn't be multipart")
+	}
+}
+
+func TestBuildMessageWithBccSetsHeaderAndRoundTripsViaDraftBcc(t *testing.T) {
+	raw, err := BuildMessage(
+		Recipient{Addr: "alice@example.com"},
+		[]Recipient{{Addr: "bob@example.com"}},
+		nil,
+		[]Recipient{{Addr: "secret@example.com"}, {Addr: "other@example.com"}},
+		"Hi", "body", "", "", nil,
+	)
+	if err != nil {
+		t.Fatalf("BuildMessage: %v", err)
+	}
+	if !strings.Contains(string(raw), "secret@example.com") {
+		t.Fatal("Bcc header should be present on a message built with bcc addresses")
+	}
+
+	got, err := DraftBcc(raw)
+	if err != nil {
+		t.Fatalf("DraftBcc: %v", err)
+	}
+	if len(got) != 2 || got[0] != "secret@example.com" || got[1] != "other@example.com" {
+		t.Fatalf("DraftBcc = %v, want [secret@example.com other@example.com]", got)
+	}
+}
+
+func TestBuildMessageWithoutBccHasNoBccHeader(t *testing.T) {
+	raw, err := BuildMessage(Recipient{Addr: "alice@example.com"}, nil, nil, nil, "Hi", "body", "", "", nil)
+	if err != nil {
+		t.Fatalf("BuildMessage: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "bcc:") {
+		t.Fatal("a message built with no bcc addresses shouldn't have a Bcc header at all")
+	}
+	got, err := DraftBcc(raw)
+	if err != nil || got != nil {
+		t.Fatalf("DraftBcc = %v, %v; want nil, nil", got, err)
 	}
 }

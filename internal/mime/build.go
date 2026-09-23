@@ -35,7 +35,15 @@ type OutgoingAttachment struct {
 // 0 — a multipart/mixed envelope carrying it alongside each attachment.
 // inReplyTo and references, when non-empty, are the Message-IDs (without
 // angle brackets) this message is replying to.
-func BuildMessage(from Recipient, to, cc []Recipient, subject, body, inReplyTo, references string, attachments []OutgoingAttachment) ([]byte, error) {
+//
+// bcc is normally empty: an SMTP transaction's Bcc recipients belong only
+// in its envelope (see the caller's RCPT TO addresses), never in the built
+// message's headers, or every recipient would see who else was bcc'd. The
+// one legitimate use of a non-empty bcc is a message that's never
+// delivered at all — a copy saved to the Drafts folder — where it's the
+// only way to remember the intended Bcc list for when the draft is
+// resumed; see DraftBcc.
+func BuildMessage(from Recipient, to, cc, bcc []Recipient, subject, body, inReplyTo, references string, attachments []OutgoingAttachment) ([]byte, error) {
 	var h mail.Header
 	h.SetDate(time.Now())
 	h.SetAddressList("From", []*mail.Address{from.mailAddress()})
@@ -44,6 +52,9 @@ func BuildMessage(from Recipient, to, cc []Recipient, subject, body, inReplyTo, 
 	}
 	if len(cc) > 0 {
 		h.SetAddressList("Cc", addressList(cc))
+	}
+	if len(bcc) > 0 {
+		h.SetAddressList("Bcc", addressList(bcc))
 	}
 	h.SetSubject(subject)
 	if err := h.GenerateMessageID(); err != nil {

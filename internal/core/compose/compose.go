@@ -13,6 +13,7 @@ import (
 	"github.com/tomowang/pigeoncli/internal/core/folder"
 	"github.com/tomowang/pigeoncli/internal/core/message"
 	"github.com/tomowang/pigeoncli/internal/core/signature"
+	"github.com/tomowang/pigeoncli/internal/imap"
 	"github.com/tomowang/pigeoncli/internal/mime"
 	"github.com/tomowang/pigeoncli/internal/smtp"
 )
@@ -78,11 +79,19 @@ func NewAttachmentFromFile(path string) (Attachment, error) {
 type Service struct {
 	// folderSvc is used, best-effort, to refresh the account's folders
 	// after a successful send so a server-side copy in Sent shows up
-	// locally. It may be nil, in which case Send skips that step.
+	// locally. It may be nil, in which case Send skips that step, and
+	// SaveDraft/DiscardDraft/DraftsFolder (which need it to locate the
+	// Drafts folder) fail outright.
 	folderSvc *folder.Service
 	// signatureSvc supplies the default signature appended to new reply
 	// drafts. It may be nil, in which case NewReply appends none.
 	signatureSvc *signature.Service
+
+	// dial opens an authenticated IMAP connection for SaveDraft and
+	// DiscardDraft (Send goes over SMTP instead and has no need of it). It
+	// is nil in production (see dialCompose) and only replaced by tests
+	// that point the service at an in-process server.
+	dial func(ctx context.Context, cfg config.Account) (*imap.Client, error)
 }
 
 // NewService creates a Service. folderSvc may be nil to skip the
@@ -249,7 +258,8 @@ func quote(orig message.Message, plainText string) string {
 // as an error — the message has already been sent by that point.
 func (s *Service) Send(ctx context.Context, cfg config.Account, draft Draft) error {
 	from := mime.Recipient{Name: cfg.DisplayName, Addr: cfg.Email}
-	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), draft.Subject, draft.Body,
+	// bcc is nil, not recipients(draft.Bcc) — see the comment below on why.
+	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), nil, draft.Subject, draft.Body,
 		draft.InReplyTo, draft.References, outgoingAttachments(draft.Attachments))
 	if err != nil {
 		return fmt.Errorf("build message: %w", err)

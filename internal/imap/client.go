@@ -478,6 +478,32 @@ func (cl *Client) Purge(ctx context.Context, uids []uint32) error {
 	return nil
 }
 
+// Append uploads raw as a new message in mailbox, tagged with flags (e.g.
+// `\Draft`). Unlike most Client methods, mailbox doesn't need to be the
+// currently selected one — APPEND names its own target mailbox. It returns
+// the new message's UID when the server reports one (APPENDUID, UIDPLUS or
+// IMAP4rev2's implicit support); 0 otherwise, meaning the caller can't
+// reliably re-locate the message without a folder sync.
+func (cl *Client) Append(ctx context.Context, mailbox string, flags []string, raw []byte) (uint32, error) {
+	imapFlags := make([]imap.Flag, len(flags))
+	for i, f := range flags {
+		imapFlags[i] = imap.Flag(f)
+	}
+	cmd := cl.c.Append(mailbox, int64(len(raw)), &imap.AppendOptions{Flags: imapFlags, Time: time.Now()})
+	if _, err := cmd.Write(raw); err != nil {
+		_ = cmd.Close()
+		return 0, fmt.Errorf("append to %q: %w", mailbox, err)
+	}
+	if err := cmd.Close(); err != nil {
+		return 0, fmt.Errorf("append to %q: %w", mailbox, err)
+	}
+	data, err := cmd.Wait()
+	if err != nil {
+		return 0, fmt.Errorf("append to %q: %w", mailbox, err)
+	}
+	return uint32(data.UID), nil
+}
+
 func headerFromBuffer(b *imapclient.FetchMessageBuffer) MessageHeader {
 	h := MessageHeader{
 		UID:     uint32(b.UID),

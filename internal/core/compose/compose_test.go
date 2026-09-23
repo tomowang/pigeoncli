@@ -193,7 +193,7 @@ func TestSendIncludesAttachments(t *testing.T) {
 		Attachments: []Attachment{{Filename: "notes.txt", Data: []byte("hello")}},
 	}
 	from := mime.Recipient{Addr: "me@example.com"}
-	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), draft.Subject, draft.Body,
+	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), nil, draft.Subject, draft.Body,
 		draft.InReplyTo, draft.References, outgoingAttachments(draft.Attachments))
 	if err != nil {
 		t.Fatalf("BuildMessage: %v", err)
@@ -242,7 +242,7 @@ func TestBuildForwardDraftDoesNotDoublePrefixSubject(t *testing.T) {
 
 func TestBuildForwardDraftCarriesAttachments(t *testing.T) {
 	raw, err := mime.BuildMessage(
-		mime.Recipient{Addr: "alice@example.com"}, nil, nil, "Report", "See attached.", "", "",
+		mime.Recipient{Addr: "alice@example.com"}, nil, nil, nil, "Report", "See attached.", "", "",
 		[]mime.OutgoingAttachment{{Filename: "report.pdf", Data: []byte("%PDF fake")}},
 	)
 	if err != nil {
@@ -315,7 +315,9 @@ func TestSendIncludesBccInEnvelopeNotHeaders(t *testing.T) {
 		Body:    "body",
 	}
 	from := mime.Recipient{Addr: "me@example.com"}
-	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), draft.Subject, draft.Body,
+	// nil bcc here, matching what Send itself passes to BuildMessage — see
+	// its comment on why draft.Bcc never reaches the built headers.
+	raw, err := mime.BuildMessage(from, recipients(draft.To), recipients(draft.Cc), nil, draft.Subject, draft.Body,
 		draft.InReplyTo, draft.References, outgoingAttachments(draft.Attachments))
 	if err != nil {
 		t.Fatalf("BuildMessage: %v", err)
