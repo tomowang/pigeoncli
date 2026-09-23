@@ -23,7 +23,8 @@ func (m App) startReply(replyAll bool) (tea.Model, tea.Cmd) {
 	}
 	draft := m.composeSvc.NewReply(m.ctx, m.selectedAccount, *m.viewingMsg, m.viewBody, replyAll)
 	m.viewingMsg = nil
-	return m.enterCompose(draft, composeFieldBody), nil
+	nm := m.enterCompose(draft, composeFieldBody)
+	return nm, draftAutosaveTickCmd(nm.draftGen)
 }
 
 // startForward builds a forward draft for the message currently being
@@ -36,7 +37,8 @@ func (m App) startForward() (tea.Model, tea.Cmd) {
 	}
 	draft := m.composeSvc.NewForward(m.ctx, m.selectedAccount, *m.viewingMsg, m.viewBody)
 	m.viewingMsg = nil
-	return m.enterCompose(draft, composeFieldTo), nil
+	nm := m.enterCompose(draft, composeFieldTo)
+	return nm, draftAutosaveTickCmd(nm.draftGen)
 }
 
 // startNewMessage builds an empty draft (just the account's default
@@ -44,7 +46,8 @@ func (m App) startForward() (tea.Model, tea.Cmd) {
 // To, since there's nothing pre-filled to edit.
 func (m App) startNewMessage() (tea.Model, tea.Cmd) {
 	draft := m.composeSvc.NewMessage(m.ctx, m.selectedAccount)
-	return m.enterCompose(draft, composeFieldTo), nil
+	nm := m.enterCompose(draft, composeFieldTo)
+	return nm, draftAutosaveTickCmd(nm.draftGen)
 }
 
 // enterCompose renders draft into fresh compose widgets, focuses field,
@@ -73,6 +76,16 @@ func (m App) enterCompose(draft compose.Draft, field composeField) App {
 	m.composeReferences = draft.References
 	m.composeAttachments = draft.Attachments
 	m.attachingFile = false
+
+	// A fresh session: no saved copy yet, and draftInitial is what "no
+	// edits made" means for it — see draftBaseline. startEditDraft
+	// overrides draftRef/draftLastSaved right after this call, for a
+	// session that resumes an already-saved draft instead.
+	m.draftGen++
+	m.draftInitial = draft
+	m.draftRef = compose.DraftRef{}
+	m.draftLastSaved = compose.Draft{}
+	m.draftSaving = false
 
 	m.composing = true
 	m = m.clearStatus()
@@ -105,9 +118,7 @@ func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
-			m.composing = false
-			m = m.clearStatus()
-			return m, nil
+			return m.cancelCompose()
 		case "tab":
 			return m.cycleComposeField(), nil
 		case "ctrl+s":
@@ -116,6 +127,8 @@ func (m App) updateComposing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.beginAttachFile(), nil
 		case "ctrl+r":
 			return m.removeLastAttachment()
+		case "ctrl+o":
+			return m.saveDraftNow()
 		}
 	}
 
@@ -220,16 +233,7 @@ func (m App) cycleComposeField() App {
 }
 
 func (m App) sendCompose() (tea.Model, tea.Cmd) {
-	draft := compose.Draft{
-		To:          splitAddrs(m.composeTo.Value()),
-		Cc:          splitAddrs(m.composeCc.Value()),
-		Bcc:         splitAddrs(m.composeBcc.Value()),
-		Subject:     m.composeSubject.Value(),
-		Body:        m.composeBody.Value(),
-		InReplyTo:   m.composeInReplyTo,
-		References:  m.composeReferences,
-		Attachments: m.composeAttachments,
-	}
+	draft := m.currentDraft()
 	cfg := m.selectedAccount
 	ctx := m.ctx
 	svc := m.composeSvc
@@ -239,6 +243,34 @@ func (m App) sendCompose() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, func() tea.Msg {
 		return sendResultMsg{err: svc.Send(ctx, cfg, draft)}
 	})
+}
+
+// cancelCompose closes the compose pane. If the draft has changed since it
+// was last saved (or, if never saved, since the session started — see
+// draftBaseline), it's saved to the Drafts folder first so the work isn't
+// lost; the save happens in the background and the pane closes right away
+// either way.
+func (m App) cancelCompose() (tea.Model, tea.Cmd) {
+	current := m.currentDraft()
+	dirty := !draftsEqual(current, m.draftBaseline())
+	m.composing = false
+	m = m.clearStatus()
+	if !dirty {
+		return m, nil
+	}
+	return m, m.saveDraftCmd(current, false)
+}
+
+// saveDraftNow is ctrl+o: save the draft right now, reporting success or
+// failure in the status bar either way (unlike the silent autosave tick).
+func (m App) saveDraftNow() (tea.Model, tea.Cmd) {
+	if m.draftSaving {
+		return m.setStatus("Already saving…", sevInfo)
+	}
+	m.draftSaving = true
+	var cmd tea.Cmd
+	m, cmd = m.setStatus("Saving draft…", sevInfo)
+	return m, tea.Batch(cmd, m.saveDraftCmd(m.currentDraft(), true))
 }
 
 func splitAddrs(s string) []string {

@@ -140,6 +140,18 @@ type App struct {
 	attachingFile      bool
 	attachFileInput    textinput.Model
 
+	// Draft autosave (see draft.go). draftGen ties an in-flight autosave
+	// tick/save result to the compose session that started it, so one from
+	// a session that has since closed or been replaced is ignored.
+	// draftInitial is the content enterCompose started with; draftRef and
+	// draftLastSaved describe the current session's saved copy, if any —
+	// see draftBaseline.
+	draftGen       int
+	draftInitial   compose.Draft
+	draftRef       compose.DraftRef
+	draftLastSaved compose.Draft
+	draftSaving    bool
+
 	searching         bool
 	searchInput       textinput.Model
 	showSearchResults bool
@@ -543,11 +555,27 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slog.Info("message sent")
 		m.composing = false
+		cmds := []tea.Cmd{m.loadFoldersCmd(m.selectedAccount.Slug)}
+		if m.draftRef.UID != 0 {
+			// This session started from (or autosaved into) a draft; it's
+			// been sent now, so the saved copy shouldn't linger.
+			cmds = append(cmds, m.discardDraftCmd(m.draftRef))
+			m.draftRef = compose.DraftRef{}
+		}
 		var cmd tea.Cmd
 		m, cmd = m.setStatus("Message sent.", sevSuccess)
 		// Service.Send already refreshed the sqlite cache (e.g. a Sent
 		// copy); reload folders so this pane's counts reflect that too.
-		return m, tea.Batch(cmd, m.loadFoldersCmd(m.selectedAccount.Slug))
+		return m, tea.Batch(append(cmds, cmd)...)
+
+	case draftAutosaveTickMsg:
+		return m.handleDraftAutosaveTick(msg)
+
+	case draftSaveResultMsg:
+		return m.handleDraftSaveResult(msg)
+
+	case draftDiscardedMsg:
+		return m.handleDraftDiscarded(msg)
 
 	case triageResultMsg:
 		return m.handleTriageResult(msg)
@@ -925,6 +953,11 @@ func (m App) updateViewing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startReply(true)
 	case "f":
 		return m.startForward()
+	case "c":
+		if m.currentFolderSpecialUse() != `\Drafts` {
+			return m, nil
+		}
+		return m.startEditDraft()
 	case "g":
 		if m.viewingMsg == nil {
 			return m, nil
@@ -1133,7 +1166,7 @@ func (m App) shortcutsLine() string {
 		if m.attachingFile {
 			return "pigeon — attach file — enter: attach · esc: cancel"
 		}
-		return "pigeon — compose — tab: next field · ctrl+g: attach file · ctrl+r: remove last attachment · ctrl+s: send · esc: cancel"
+		return "pigeon — compose — tab: next field · ctrl+g: attach file · ctrl+r: remove last attachment · ctrl+o: save draft · ctrl+s: send · esc: cancel (autosaves if changed)"
 	}
 	if m.addingAccount {
 		return "pigeon — add account — tab/shift+tab: field · ←/→: change security · ctrl+s: save · esc: cancel"
@@ -1233,6 +1266,7 @@ var helpSections = []helpSection{
 			{"r", "reply"},
 			{"R", "reply-all"},
 			{"f", "forward"},
+			{"c", "continue editing (in the Drafts folder only)"},
 			{"t", "toggle raw / rendered"},
 			{"g", "go to related messages (In-Reply-To / References)"},
 			{"a", "save an attachment"},
@@ -1245,8 +1279,9 @@ var helpSections = []helpSection{
 			{"tab", "next field (To / Cc / Bcc / Subject / Body)"},
 			{"ctrl+g", "attach a file"},
 			{"ctrl+r", "remove the last attachment"},
+			{"ctrl+o", "save draft now"},
 			{"ctrl+s", "send"},
-			{"esc", "cancel"},
+			{"esc", "cancel (autosaves to the Drafts folder if the draft changed)"},
 		},
 	},
 	{
