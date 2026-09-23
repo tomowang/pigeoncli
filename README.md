@@ -101,6 +101,7 @@ pigeon signature set-default <id> # make a signature the default in its scope
 pigeon message list <slug> [folder]        # list cached messages (default folder: INBOX)
 pigeon message show <slug> <uid>           # show a message's headers and body (--folder)
 pigeon message search <slug> <query>       # full-text search a synced account's headers
+# list/show/search all take --json for machine-readable output instead of a table
 pigeon message spam <slug> <uid>           # report a message as spam (moves to Junk)
 pigeon message unspam <slug> <uid>         # undo a spam report (moves back to Inbox)
 pigeon message archive <slug> <uid>...     # move messages to the Archive folder (All Mail on Gmail)
@@ -111,7 +112,7 @@ pigeon message star|unstar <slug> <uid>... # star or unstar messages
 pigeon message attachment save <slug> <uid> <index> <dest-path>  # save an attachment to disk
 # archive/delete/move/read/unread/star/unstar/spam/unspam all take --folder (default: INBOX)
 
-pigeon folder list <slug>        # list an account's synced folders
+pigeon folder list <slug>        # list an account's synced folders (--json for machine-readable output)
 
 pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --bcc, --subject, --body, --attach)
 pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body, --attach, --bcc)

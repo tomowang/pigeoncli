@@ -33,7 +33,8 @@ func newMessageCmd() *cobra.Command {
 }
 
 func newMessageListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "list <slug> [folder]",
 		Short: "List cached messages in a synced folder",
 		Args:  cobra.RangeArgs(1, 2),
@@ -62,6 +63,9 @@ func newMessageListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), toJSONMessages(msgs))
+			}
 			if len(msgs) == 0 {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No messages cached in %q. Sync with `pigeon sync %s`.\n", folderPath, slug)
 				return nil
@@ -80,10 +84,13 @@ func newMessageListCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON instead of a table")
+	return cmd
 }
 
 func newMessageShowCmd() *cobra.Command {
 	var folderPath string
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "show <slug> <uid>",
 		Short: "Show a cached message's headers and body",
@@ -133,6 +140,14 @@ func newMessageShowCmd() *cobra.Command {
 				return err
 			}
 
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), jsonShownMessage{
+					jsonMessage: toJSONMessage(hdr),
+					Body:        body.PlainText,
+					Attachments: toJSONAttachments(body.Attachments),
+				})
+			}
+
 			out := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(out, "From:    %s <%s>\n", hdr.FromName, hdr.FromAddr)
 			_, _ = fmt.Fprintf(out, "To:      %s\n", joinAddrs(hdr.ToAddrs))
@@ -154,11 +169,13 @@ func newMessageShowCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&folderPath, "folder", defaultListFolder, "folder the message lives in")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON instead of plain text")
 	return cmd
 }
 
 func newMessageSearchCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "search <slug> <query>",
 		Short: "Full-text search a synced account's message headers",
 		Args:  cobra.ExactArgs(2),
@@ -183,6 +200,9 @@ func newMessageSearchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), toJSONSearchResults(results))
+			}
 			if len(results) == 0 {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No messages match %q.\n", query)
 				return nil
@@ -201,6 +221,8 @@ func newMessageSearchCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON instead of a table")
+	return cmd
 }
 
 func newMessageSpamCmd() *cobra.Command {

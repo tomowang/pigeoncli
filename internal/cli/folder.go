@@ -17,7 +17,8 @@ func newFolderCmd() *cobra.Command {
 }
 
 func newFolderListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "list <slug>",
 		Short: "List an account's synced folders",
 		Args:  cobra.ExactArgs(1),
@@ -42,6 +43,9 @@ func newFolderListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), toJSONFolders(folders))
+			}
 			if len(folders) == 0 {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No folders synced. Sync with `pigeon sync %s`.\n", slug)
 				return nil
@@ -55,4 +59,6 @@ func newFolderListCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON instead of a table")
+	return cmd
 }
