@@ -117,9 +117,18 @@ pigeon folder list <slug>        # list an account's synced folders (--json for 
 pigeon compose send <slug> --to <addr>     # compose and send a new message (--cc, --bcc, --subject, --body, --attach)
 pigeon compose reply <slug> <uid>          # reply to a cached message (--all, --folder, --subject, --body, --attach, --bcc)
 pigeon compose forward <slug> <uid> --to <addr>  # forward a cached message, with its own attachments carried over (--cc, --bcc, --folder, --subject, --body, --attach)
+
+pigeon compose drafts <slug>              # list saved drafts (--json, --folder to override auto-detection)
+pigeon compose send-draft <slug> <uid>    # send a saved draft, then remove it (--to/--cc/--bcc/--subject/--body override it; --attach adds to it)
+pigeon compose discard-draft <slug> <uid> # permanently delete a saved draft
 ```
 
-`--attach <path>` and `--bcc <addr>` are repeatable, on all three commands.
+`--attach <path>` and `--bcc <addr>` are repeatable, on send/reply/forward.
+Any of them also takes `--draft` to save to the Drafts folder instead of
+sending — `--replace <uid>` updates an existing draft instead of saving a
+new one. All drafts commands auto-detect the account's Drafts folder
+(RFC 6154 special-use `\Drafts`); `--drafts-folder`/`--folder` overrides
+that when a server doesn't advertise it.
 
 Global flags (any subcommand): `--config`, `--db`, `--blobs`, `--log-level`,
 `--log-file`. Each defaults to the XDG config/cache directories when unset.
@@ -152,12 +161,15 @@ message viewer, and act on the selected or open message. They take over the
 scroll); `pgup`/`pgdn` and `ctrl+d`/`ctrl+u` still scroll.
 
 In the message viewer: `r` reply, `R` reply-all, `f` forward (carries over
-the original's own attachments), `t` toggle raw/rendered, `g` go to related
-messages, `a` save an attachment, `esc` back to list.
+the original's own attachments), `c` continue editing (only in the Drafts
+folder), `t` toggle raw/rendered, `g` go to related messages, `a` save an
+attachment, `esc` back to list.
 
 While composing: `tab` next field (To / Cc / Bcc / Subject / Body), `ctrl+g`
 attach a file (prompts for a path), `ctrl+r` remove the last attachment,
-`ctrl+s` send, `esc` cancel.
+`ctrl+o` save the draft now, `ctrl+s` send, `esc` cancel. The draft
+autosaves to the Drafts folder every 20s while it has unsaved changes, and
+once more on `esc` if it still does; sending removes the saved copy.
 
 Press `?` inside the TUI for the full, context-aware list.
 
